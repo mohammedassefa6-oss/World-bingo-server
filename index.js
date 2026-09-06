@@ -107,15 +107,19 @@ app.post("/join-room", requireAuth, async (req, res) => {
     const roomId = `stake_${stake}_open`;
     const roomRef = db.ref(`rooms/${roomId}`);
     const balanceRef = db.ref(`users/${uid}/balance`);
-
+console.log("join-room: uid=", uid, "stake=", stake, "cartela=", cartelaNumber);
     const balanceResult = await balanceRef.transaction((current) => {
+      console.log("current balance value:", current, typeof current);
       current = current || 0;
       if (current < stake) return;
       return current - stake;
     });
+    console.log("transaction committed?", balanceResult.committed);
     if (!balanceResult.committed) {
       return res.status(412).json({ error: "Insufficient balance" });
     }
+    
+    
 
     const joinResult = await roomRef.transaction((room) => {
       room = room || { stake, state: "waiting", players: {}, taken: {} };
