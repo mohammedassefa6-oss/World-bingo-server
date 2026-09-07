@@ -1,3 +1,4 @@
+
 const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
@@ -112,7 +113,10 @@ app.post("/join-room", requireAuth, async (req, res) => {
     const roomId = `stake_${stake}_open`;
     const roomRef = db.ref(`rooms/${roomId}`);
     const balanceRef = db.ref(`users/${uid}/balance`);
-console.log("join-room: uid=", uid, "stake=", stake, "cartela=", cartelaNumber);await balanceRef.once("value");
+    console.log("join-room: uid=", uid, "stake=", stake, "cartela=", cartelaNumber);
+    console.log("balanceRef path:", balanceRef.toString());
+    const onceSnap = await balanceRef.once("value");
+    console.log("DIRECT READ balance:", onceSnap.val(), "exists?", onceSnap.exists());
     const balanceResult = await balanceRef.transaction((current) => {
       console.log("current balance value:", current, typeof current);
       current = current || 0;
