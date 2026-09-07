@@ -12,7 +12,8 @@ const serviceAccountJson = Buffer.from(
 
 if (!serviceAccountJson) {
   console.error("FIREBASE_SERVICE_ACCOUNT_BASE64 is not set. See README.md.");
-  process.exit(1);}
+  process.exit(1);
+}
 
 const parsedServiceAccount = JSON.parse(serviceAccountJson);
 console.log("SERVICE ACCOUNT project_id:", parsedServiceAccount.project_id);
@@ -22,8 +23,6 @@ admin.initializeApp({
   credential: admin.credential.cert(parsedServiceAccount),
   databaseURL: process.env.FIREBASE_DATABASE_URL,
 });
-
-
 
 const db = admin.database();
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -103,35 +102,32 @@ app.post("/join-room", requireAuth, async (req, res) => {
   try {
     const uid = req.uid;
     const { stake, cartelaNumber } = req.body;
-    if (!Number.isInteger(stake) || stake <= 0) {
+    const parsedStake = Number(stake);
+    if (!Number.isInteger(parsedStake) || parsedStake <= 0) {
       return res.status(400).json({ error: "bad stake" });
     }
     if (!Number.isInteger(cartelaNumber) || cartelaNumber < 1 || cartelaNumber > 100) {
       return res.status(400).json({ error: "bad cartela number" });
     }
 
-    const roomId = `stake_${stake}_open`;
+    const roomId = `stake_${parsedStake}_open`;
     const roomRef = db.ref(`rooms/${roomId}`);
     const balanceRef = db.ref(`users/${uid}/balance`);
-    console.log("join-room: uid=", uid, "stake=", stake, "cartela=", cartelaNumber);
-    console.log("balanceRef path:", balanceRef.toString());
-    const onceSnap = await balanceRef.once("value");
-    console.log("DIRECT READ balance:", onceSnap.val(), "exists?", onceSnap.exists());
+    console.log("join-room: uid=", uid, "stake=", parsedStake, "cartela=", cartelaNumber);
+    
     const balanceResult = await balanceRef.transaction((current) => {
-      console.log("current balance value:", current, typeof current);
-      current = current || 0;
-      if (current < stake) return;
-      return current - stake;
+      current = Number(current) || 0;
+      console.log("current balance value:", current, "required stake:", parsedStake);
+      if (current < parsedStake) return;
+      return current - parsedStake;
     });
-    console.log("transaction committed?", balanceResult.committed);
+
     if (!balanceResult.committed) {
       return res.status(412).json({ error: "Insufficient balance" });
     }
-    
-    
 
     const joinResult = await roomRef.transaction((room) => {
-      room = room || { stake, state: "waiting", players: {}, taken: {} };
+      room = room || { stake: parsedStake, state: "waiting", players: {}, taken: {} };
       if (room.state !== "waiting") return;
       if (room.taken && room.taken[cartelaNumber]) return;
       room.players = room.players || {};
@@ -142,7 +138,7 @@ app.post("/join-room", requireAuth, async (req, res) => {
     });
 
     if (!joinResult.committed) {
-      await balanceRef.transaction((current) => (current || 0) + stake);
+      await balanceRef.transaction((current) => (Number(current) || 0) + parsedStake);
       return res.status(412).json({ error: "Could not join room (cartela taken or room started)" });
     }
 
