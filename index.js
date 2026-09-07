@@ -11,7 +11,7 @@ const serviceAccountJson = Buffer.from(
 
 if (!serviceAccountJson) {
   console.error("FIREBASE_SERVICE_ACCOUNT_BASE64 is not set. See README.md.");
-  process.exit(1);
+  process.exit(1);}
 
 const parsedServiceAccount = JSON.parse(serviceAccountJson);
 console.log("SERVICE ACCOUNT project_id:", parsedServiceAccount.project_id);
