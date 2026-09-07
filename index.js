@@ -12,12 +12,17 @@ const serviceAccountJson = Buffer.from(
 if (!serviceAccountJson) {
   console.error("FIREBASE_SERVICE_ACCOUNT_BASE64 is not set. See README.md.");
   process.exit(1);
-}
+
+const parsedServiceAccount = JSON.parse(serviceAccountJson);
+console.log("SERVICE ACCOUNT project_id:", parsedServiceAccount.project_id);
+console.log("DATABASE_URL env:", process.env.FIREBASE_DATABASE_URL);
 
 admin.initializeApp({
-  credential: admin.credential.cert(JSON.parse(serviceAccountJson)),
+  credential: admin.credential.cert(parsedServiceAccount),
   databaseURL: process.env.FIREBASE_DATABASE_URL,
 });
+
+
 
 const db = admin.database();
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
