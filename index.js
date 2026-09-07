@@ -112,7 +112,7 @@ app.post("/join-room", requireAuth, async (req, res) => {
     const roomId = `stake_${stake}_open`;
     const roomRef = db.ref(`rooms/${roomId}`);
     const balanceRef = db.ref(`users/${uid}/balance`);
-console.log("join-room: uid=", uid, "stake=", stake, "cartela=", cartelaNumber);
+console.log("join-room: uid=", uid, "stake=", stake, "cartela=", cartelaNumber);await balanceRef.once("value");
     const balanceResult = await balanceRef.transaction((current) => {
       console.log("current balance value:", current, typeof current);
       current = current || 0;
