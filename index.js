@@ -29,6 +29,24 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const HOUSE_CUT = 0.2;
 const CALL_INTERVAL_MS = 3000;
 
+function toFiniteNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function toPositiveInteger(value) {
+  const number = toFiniteNumber(value);
+  return number !== null && Number.isInteger(number) && number > 0 ? number : null;
+}
+
+async function getTelegramProfile(uid) {
+  if (typeof uid !== "string" || !/^tg_\d+$/.test(uid)) return null;
+  const snapshot = await db.ref(`users/${uid}`).once("value");
+  const profile = snapshot.val();
+  return profile && String(profile.telegramId) === uid.slice(3) ? profile : null;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -39,7 +57,10 @@ async function requireAuth(req, res, next) {
   if (!idToken) return res.status(401).json({ error: "Missing Authorization header" });
   try {
     const decoded = await admin.auth().verifyIdToken(idToken);
+    const profile = await getTelegramProfile(decoded.uid);
+    if (!profile) return res.status(403).json({ error: "Telegram user verification required" });
     req.uid = decoded.uid;
+    req.telegramProfile = profile;
     next();
   } catch (e) {
     res.status(401).json({ error: "Invalid or expired token" });
@@ -54,6 +75,9 @@ app.post("/verify-telegram-login", async (req, res) => {
 
     const params = new URLSearchParams(initData);
     const hash = params.get("hash");
+    const authDateValue = params.get("auth_date");
+    const userValue = params.get("user");
+    if (!hash || !authDateValue || !userValue) return res.status(400).json({ error: "Invalid Telegram WebApp data" });
     params.delete("hash");
 
     const dataCheckString = [...params.entries()]
@@ -64,17 +88,21 @@ app.post("/verify-telegram-login", async (req, res) => {
     const secretKey = crypto.createHmac("sha256", "WebAppData").update(TELEGRAM_BOT_TOKEN).digest();
     const computedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
 
-    if (computedHash !== hash) {
+    const computedHashBuffer = Buffer.from(computedHash, "hex");
+    const providedHashBuffer = Buffer.from(hash, "hex");
+    if (providedHashBuffer.length !== computedHashBuffer.length || !crypto.timingSafeEqual(computedHashBuffer, providedHashBuffer)) {
       return res.status(403).json({ error: "Invalid Telegram signature" });
     }
 
-    const authDate = Number(params.get("auth_date") || 0);
+    const authDate = Number(authDateValue);
     const ageSeconds = Date.now() / 1000 - authDate;
-    if (ageSeconds > 300) {
+    if (!Number.isFinite(authDate) || ageSeconds > 300 || ageSeconds < -30) {
       return res.status(403).json({ error: "initData expired, reopen the app" });
     }
 
-    const user = JSON.parse(params.get("user"));
+    let user;
+    try { user = JSON.parse(userValue); } catch { return res.status(400).json({ error: "Invalid Telegram user data" }); }
+    if (!user || !user.id) return res.status(400).json({ error: "Telegram user is required" });
     const uid = `tg_${user.id}`;
 
     const userRef = db.ref(`users/${uid}`);
@@ -90,11 +118,25 @@ app.post("/verify-telegram-login", async (req, res) => {
       });
     }
 
+    const balanceSnapshot = await userRef.child("balance").once("value");
+    const balance = toFiniteNumber(balanceSnapshot.val());
     const customToken = await admin.auth().createCustomToken(uid);
-    res.json({ customToken, uid });
+    res.json({ customToken, uid, balance: balance === null ? 0 : balance });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/balance", requireAuth, async (req, res) => {
+  try {
+    const snapshot = await db.ref(`users/${req.uid}/balance`).once("value");
+    const balance = toFiniteNumber(snapshot.val());
+    if (balance === null) return res.status(500).json({ error: "Balance unavailable" });
+    res.json({ balance });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Could not load balance" });
   }
 });
 
@@ -102,13 +144,10 @@ app.post("/join-room", requireAuth, async (req, res) => {
   try {
     const uid = req.uid;
     const { stake, cartelaNumber } = req.body;
-    const parsedStake = Number(stake);
-    if (!Number.isInteger(parsedStake) || parsedStake <= 0) {
-      return res.status(400).json({ error: "bad stake" });
-    }
-    if (!Number.isInteger(cartelaNumber) || cartelaNumber < 1 || cartelaNumber > 100) {
-      return res.status(400).json({ error: "bad cartela number" });
-    }
+    const parsedStake = toPositiveInteger(stake);
+    const parsedCartelaNumber = toPositiveInteger(cartelaNumber);
+    if (parsedStake === null) return res.status(400).json({ error: "Invalid room stake" });
+    if (parsedCartelaNumber === null || parsedCartelaNumber > 100) return res.status(400).json({ error: "Invalid cartela number" });
 
     const roomId = `stake_${parsedStake}_open`;
     const roomRef = db.ref(`rooms/${roomId}`);
@@ -116,29 +155,35 @@ app.post("/join-room", requireAuth, async (req, res) => {
     console.log("join-room: uid=", uid, "stake=", parsedStake, "cartela=", cartelaNumber);
     
     const balanceResult = await balanceRef.transaction((current) => {
-      current = Number(current) || 0;
-      console.log("current balance value:", current, "required stake:", parsedStake);
-      if (current < parsedStake) return;
-      return current - parsedStake;
+      const balance = toFiniteNumber(current);
+      console.log("current balance value:", balance, "required stake:", parsedStake);
+      if (balance === null || balance < parsedStake) return;
+      return balance - parsedStake;
     });
 
     if (!balanceResult.committed) {
-      return res.status(412).json({ error: "Insufficient balance" });
+      const balance = toFiniteNumber(balanceResult.snapshot.val());
+      if (balance === null) return res.status(412).json({ error: "Balance unavailable. Please try again." });
+      return res.status(412).json({ error: `Insufficient balance. You have ${balance} ETB; ${parsedStake} ETB is required.` });
     }
 
     const joinResult = await roomRef.transaction((room) => {
       room = room || { stake: parsedStake, state: "waiting", players: {}, taken: {} };
       if (room.state !== "waiting") return;
-      if (room.taken && room.taken[cartelaNumber]) return;
+      if (Number(room.stake) !== parsedStake) return;
+      if (room.taken && room.taken[parsedCartelaNumber]) return;
       room.players = room.players || {};
       room.taken = room.taken || {};
-      room.players[uid] = { cartelaNumber, joinedAt: Date.now() };
-      room.taken[cartelaNumber] = true;
+      room.players[uid] = { cartelaNumber: parsedCartelaNumber, joinedAt: Date.now() };
+      room.taken[parsedCartelaNumber] = true;
       return room;
     });
 
     if (!joinResult.committed) {
-      await balanceRef.transaction((current) => (Number(current) || 0) + parsedStake);
+      await balanceRef.transaction((current) => {
+        const balance = toFiniteNumber(current);
+        return (balance === null ? 0 : balance) + parsedStake;
+      });
       return res.status(412).json({ error: "Could not join room (cartela taken or room started)" });
     }
 
@@ -151,7 +196,9 @@ app.post("/join-room", requireAuth, async (req, res) => {
       await roomRef.child("calledNumbers").set({});
     }
 
-    res.json({ roomId, playerCount, yourCard: getCard(cartelaNumber) });
+    const balanceSnapshot = await balanceRef.once("value");
+    const balance = toFiniteNumber(balanceSnapshot.val());
+    res.json({ roomId, playerCount, yourCard: getCard(parsedCartelaNumber), balance });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
