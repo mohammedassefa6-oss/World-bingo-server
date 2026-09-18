@@ -30,13 +30,13 @@ const money=v=>{const n=Number(v);return Number.isFinite(n)&&n>0&&n<=1000000?Mat
 async function profile(uid){if(typeof uid!=='string'||!/^tg_\d+$/.test(uid))return null;const s=await db.ref(`users/${uid}`).once('value');const p=s.val();return p&&String(p.telegramId)===uid.slice(3)?p:null;}
 async function auth(req,res,next){const h=req.headers.authorization||'';const token=h.startsWith('Bearer ')?h.slice(7):null;if(!token)return res.status(401).json({error:'Missing Authorization header'});try{const d=await admin.auth().verifyIdToken(token);const p=await profile(d.uid);if(!p)return res.status(403).json({error:'Telegram user verification required'});req.uid=d.uid;req.profile=p;next();}catch(e){console.error('auth:',e.message);res.status(401).json({error:'Invalid or expired token'});}}
 function adminOnly(req,res,next){auth(req,res,()=>{if(!ADMIN_UIDS.includes(req.uid))return res.status(403).json({error:'Admin access required'});next();});}
+
 function verifyTelegram(initData){if(!BOT_TOKEN)throw new Error('Bot token not configured');const p=new URLSearchParams(initData||'');const hash=p.get('hash');const authDate=Number(p.get('auth_date'));const userValue=p.get('user');if(!hash||!authDate||!userValue)throw new Error('Invalid Telegram WebApp data');p.delete('hash');const check=[...p.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${k}=${v}`).join('\n');const secret=crypto.createHmac('sha256','WebAppData').update(BOT_TOKEN).digest();const computed=crypto.createHmac('sha256',secret).update(check).digest('hex');const a=Buffer.from(computed,'hex'),b=Buffer.from(hash,'hex');if(a.length!==b.length||!crypto.timingSafeEqual(a,b))throw new Error('Invalid Telegram signature');const age=Date.now()/1000-authDate;if(!Number.isFinite(authDate)||age>300||age<-30)throw new Error('initData expired, reopen the app');let user;try{user=JSON.parse(userValue);}catch{throw new Error('Invalid Telegram user data');}if(!user||!user.id)throw new Error('Telegram user is required');return {user,startParam:p.get('start_param')||''};}
 
 app.get('/health',async(req,res)=>{try{const s=await db.ref('.info/connected').once('value').catch(()=>null);res.json({ok:true,service:'Beteseb Bingo',databaseConfigured:true,connected:s?s.val():null});}catch(e){res.status(500).json({ok:false,error:e.message});}});
 
 app.post('/verify-telegram-login',async(req,res)=>{try{const {user,startParam}=verifyTelegram(req.body.initData);const uid=`tg_${user.id}`;const userRef=db.ref(`users/${uid}`);const snap=await userRef.once('value');if(!snap.exists()){const code=String(user.id);await userRef.set({balance:0,referrals:0,cards:0,hasDeposited:false,name:user.first_name||'Player',telegramId:user.id,referralCode:code,createdAt:admin.database.ServerValue.TIMESTAMP});await db.ref(`referralCodes/${code}`).set(uid);}
  const pSnap=await userRef.once('value');const p=pSnap.val()||{};
- // Referral Reward: Give 1 free card and increment referrals count when a new user joins via referral[span_4](start_span)[span_4](end_span)[span_5](start_span)[span_5](end_span)
  if(!snap.exists()&&startParam){const refSnap=await db.ref(`referralCodes/${String(startParam)}`).once('value');const refUid=refSnap.val();if(refUid&&refUid!==uid){await db.ref(`users/${refUid}/referrals`).transaction(v=>(Number(v)||0)+1);await db.ref(`users/${refUid}/cards`).transaction(v=>(Number(v)||0)+1);await userRef.update({referredBy:refUid});}}
  const balance=num((await userRef.child('balance').once('value')).val());const freeCards=num((await userRef.child('cards').once('value')).val())||0;const customToken=await admin.auth().createCustomToken(uid);res.json({customToken,uid,balance:balance===null?0:balance,cards:freeCards,referralCode:p.referralCode||String(user.id)});
  }catch(e){console.error('verify:',e);res.status(403).json({error:e.message});}});
@@ -69,11 +69,36 @@ app.post('/admin/settings/telebirr', adminOnly, async (req, res) => {
     }
 });
 
-app.post('/deposit-request',auth,async(req,res)=>{try{const amount=money(req.body.amount);if(amount===null)return res.status(400).json({error:'Invalid deposit amount'});const transactionId=String(req.body.transactionId||'').trim();const id=db.ref('moneyRequests').push().key;const request={uid:req.uid,type:'deposit',amount,transactionId,status:'pending',createdAt:admin.database.ServerValue.TIMESTAMP};const updates={};updates[`moneyRequests/${id}`]=request;updates[`users/${req.uid}/transactions/${id}`]=request;await db.ref().update(updates);res.json({requestId:id,status:'pending'});}catch(e){console.error(e);res.status(500).json({error:'Could not create deposit request'});}});
+// Deposit Request with Duplicate Transaction ID Check (Anti-Fraud)
+app.post('/deposit-request',auth,async(req,res)=>{
+    try{
+        const amount=money(req.body.amount);
+        if(amount===null)return res.status(400).json({error:'Invalid deposit amount'});
+        const transactionId=String(req.body.transactionId||'').trim();
+        if(!transactionId)return res.status(400).json({error:'Transaction ID is required'});
+
+        // Check if transaction ID has already been used across the system
+        const txCheckSnap=await db.ref('usedTransactionIds').child(transactionId).once('value');
+        if(txCheckSnap.exists()){
+            return res.status(400).json({error:'ይህ የቴሌብር Transaction ID ከዚህ በፊት ጥቅም ላይ ውሏል! እባክዎ ትክክለኛ ቁጥር ያስገቡ።'});
+        }
+
+        const id=db.ref('moneyRequests').push().key;
+        const request={uid:req.uid,type:'deposit',amount,transactionId,status:'pending',createdAt:admin.database.ServerValue.TIMESTAMP};
+        const updates={};
+        updates[`moneyRequests/${id}`]=request;
+        updates[`users/${req.uid}/transactions/${id}`]=request;
+        // Temporarily reserve the transaction ID to prevent reuse while pending
+        updates[`usedTransactionIds/${transactionId}`]=req.uid;
+
+        await db.ref().update(updates);
+        res.json({requestId:id,status:'pending'});
+    }catch(e){console.error(e);res.status(500).json({error:'Could not create deposit request'});}
+});
 
 app.post('/withdrawal-request',auth,async(req,res)=>{try{const amount=money(req.body.amount);if(amount===null)return res.status(400).json({error:'Invalid withdrawal amount'});const balRef=db.ref(`users/${req.uid}/balance`);const tx=await balRef.transaction(v=>{const b=num(v);if(b===null||b<amount)return;return Math.round((b-amount)*100)/100;});if(!tx.committed)return res.status(412).json({error:'Insufficient balance'});const id=db.ref('moneyRequests').push().key;const request={uid:req.uid,type:'withdrawal',amount,status:'pending',createdAt:admin.database.ServerValue.TIMESTAMP};const updates={};updates[`moneyRequests/${id}`]=request;updates[`users/${req.uid}/transactions/${id}`]=request;try{await db.ref().update(updates);}catch(e){await balRef.transaction(v=>(num(v)||0)+amount);throw e;}res.json({requestId:id,status:'pending',balance:num(tx.snapshot.val())||0});}catch(e){console.error(e);res.status(500).json({error:'Could not create withdrawal request'});}});
 
-// Join Room using Free Card if available, otherwise from Balance[span_6](start_span)[span_6](end_span)[span_7](start_span)[span_7](end_span)
+// Join Room using Free Card if available, otherwise from Balance
 app.post('/join-room',auth,async(req,res)=>{try{const stake=posInt(req.body.stake),cardNo=posInt(req.body.cartelaNumber);if(!ALLOWED_STAKES.has(stake))return res.status(400).json({error:'Invalid room stake'});if(cardNo===null||cardNo>500)return res.status(400).json({error:'Invalid cartela number'});const roomId=`stake_${stake}_open`,roomRef=db.ref(`rooms/${roomId}`),userRef=db.ref(`users/${req.uid}`),balRef=userRef.child('balance'),cardsRef=userRef.child('cards');
  
  let usedFreeCard=false;
@@ -110,16 +135,14 @@ async function processMoney(req,res,type,status){try{const id=String(req.params.
      let addAmount = Number(r.amount);
      let bonusAdded = false;
 
-     // Check if it's the user's first time depositing
      if(!userData.hasDeposited){
-         addAmount += 10; // Add 10 ETB First Deposit Bonus
+         addAmount += 10; // First Deposit 10 ETB Bonus
          bonusAdded = true;
          await userRef.update({ hasDeposited: true });
      }
 
      await userRef.child('balance').transaction(v=>(num(v)||0)+addAmount);
      
-     // If bonus was added, record a transaction for the bonus
      if(bonusAdded){
          const bonusTxId=db.ref(`users/${r.uid}/transactions`).push().key;
          await db.ref(`users/${r.uid}/transactions/${bonusTxId}`).set({
@@ -131,6 +154,13 @@ async function processMoney(req,res,type,status){try{const id=String(req.params.
      }
  }
  
+ if(type==='deposit'&&status==='rejected'){
+     // If rejected, free up the transaction ID so it can be corrected or reused if legitimate
+     if(r.transactionId){
+         await db.ref(`usedTransactionIds/${r.transactionId}`).remove();
+     }
+ }
+
  if(type==='withdrawal'&&status==='rejected'){await db.ref(`users/${r.uid}/balance`).transaction(v=>(num(v)||0)+Number(r.amount));}
  const now=admin.database.ServerValue.TIMESTAMP;const updates={};updates[`moneyRequests/${id}/status`]=status;updates[`moneyRequests/${id}/processedAt`]=now;updates[`moneyRequests/${id}/processedBy`]=req.uid;updates[`users/${r.uid}/transactions/${id}/status`]=status;updates[`users/${r.uid}/transactions/${id}/processedAt`]=now;updates[`users/${r.uid}/transactions/${id}/processedBy`]=req.uid;await db.ref().update(updates);res.json({ok:true,status,balance:num((await db.ref(`users/${r.uid}/balance`).once('value')).val())||0});}catch(e){console.error(e);res.status(500).json({error:'Could not process request'});}}
 
