@@ -45,7 +45,7 @@ app.get('/profile',auth,async(req,res)=>{const p=await profile(req.uid);res.json
 app.get('/referral',auth,async(req,res)=>{const p=await profile(req.uid);res.json({referralCode:p.referralCode||req.uid.slice(3),referrals:Number(p.referrals||0),botUsername:BOT_USERNAME,linkBase:MINI_APP_LINK_BASE});});
 app.get('/history',auth,async(req,res)=>{try{const s=await db.ref(`users/${req.uid}/transactions`).orderByChild('createdAt').limitToLast(100).once('value');const raw=s.val()||{};const items=Object.entries(raw).map(([id,v])=>({id,...v})).sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));res.json({items});}catch(e){res.status(500).json({error:'Could not load history'});}});
 
-// Telebirr Settings API (Public & Admin)
+// Telebirr Settings API
 app.get('/settings/telebirr', async (req, res) => {
     try {
         const snap = await db.ref('settings/telebirrNumber').once('value');
@@ -80,8 +80,6 @@ app.post('/join-room',auth,async(req,res)=>{try{const stake=posInt(req.body.stak
  const balance=num((await balRef.once('value')).val())||0;res.json({roomId,playerCount:Object.keys(room.players||{}).length,yourCard:getCard(cardNo),balance});
  }catch(e){console.error('join-room:',e);res.status(500).json({error:e.message||'Could not join room'});}});
 
-app.post('/claim-bingo',auth,async(req,res)=>{try{const roomId=String(req.body.roomId||'');if(!/^stake_(10|20|50|100)_open$/.test(roomId))return res.status(400).json({error:'Invalid room'});const roomRef=db.ref(`rooms/${roomId}`);const snap=await roomRef.once('value');const room=snap.val();if(!room)return res.status(404).json({error:'Room not found'});if(room.state!=='running')return res.status(412).json({error:'Room not active'});const player=room.players&&room.players[req.uid];if(!player)return res.status(403).json({error:'You are not in this room'});const called=new Set(Object.keys(room.calledNumbers||{}).map(Number));if(!hasBingo(player.cartelaNumber,called))return res.status(412).json({error:'No BINGO on your card yet'});const count=Object.keys(room.players||{}).length;const gross=Number(room.stake)*count;const prize=Math.floor(gross*(1-HOUSE_CUT));const claimTx=await roomRef.transaction(r=>{if(!r||r.state!=='running'||!r.players||!r.players[req.uid])return;return {...r,state:'finished',winner:req.uid,prize,payoutStatus:'pending',finishedAt:Date.now()};});if(!claimTx.committed)return res.status(409).json({error:'This round has already been claimed.'});const payoutRef=db.ref(`users/${req.uid}/balance`);await payoutRef.transaction(v=>(num(v)||0)+prize);await roomRef.update({payoutStatus:'paid'});const txId=db.ref(`users/${req.uid}/transactions`).push().key;await db.ref(`users/${req.uid}/transactions/${txId}`).set({type:'win',amount:prize,roomId,status:'completed',createdAt:admin.database.ServerValue.TIMESTAMP});res.json({won:true,prize});}catch(e){console.error('claim:',e);res.status(500).json({error:'Could not process BINGO payout'});}});
-
 app.get('/admin/money-requests',adminOnly,async(req,res)=>{try{const s=await db.ref('moneyRequests').orderByChild('createdAt').limitToLast(100).once('value');const raw=s.val()||{};const items=Object.entries(raw).map(([id,v])=>({id,...v})).sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));res.json({items});}catch(e){res.status(500).json({error:'Could not load requests'});}});
 
 async function processMoney(req,res,type,status){try{const id=String(req.params.id||'');const rRef=db.ref(`moneyRequests/${id}`);const snap=await rRef.once('value');const r=snap.val();if(!r)return res.status(404).json({error:'Request not found'});if(r.type!==type)return res.status(400).json({error:'Wrong request type'});if(r.status!=='pending')return res.status(409).json({error:'Request already processed'});
@@ -94,8 +92,82 @@ app.post('/admin/deposit/:id/reject',adminOnly,(req,res)=>processMoney(req,res,'
 app.post('/admin/withdrawal/:id/approve',adminOnly,(req,res)=>processMoney(req,res,'withdrawal','approved'));
 app.post('/admin/withdrawal/:id/reject',adminOnly,(req,res)=>processMoney(req,res,'withdrawal','rejected'));
 
-async function advanceAllRooms(){try{const s=await db.ref('rooms').orderByChild('state').equalTo('running').once('value');const rooms=s.val()||{};for(const [roomId,room] of Object.entries(rooms)){const called=new Set(Object.keys(room.calledNumbers||{}).map(Number));const remaining=[];for(let n=1;n<=75;n++)if(!called.has(n))remaining.push(n);if(!remaining.length){await db.ref(`rooms/${roomId}/state`).set('finished');continue;}const next=remaining[Math.floor(Math.random()*remaining.length)];await db.ref(`rooms/${roomId}/calledNumbers/${next}`).set(true);await db.ref(`rooms/${roomId}/lastCalled`).set(next);}}catch(e){console.error('advanceAllRooms:',e.message);}}
+// Helper to get BINGO letter prefix for a number (1-75)
+function getBingoDisplay(n){
+    if(n>=1 && n<=15) return `B ${n}`;
+    if(n>=16 && n<=30) return `I ${n}`;
+    if(n>=31 && n<=45) return `N ${n}`;
+    if(n>=46 && n<=60) return `G ${n}`;
+    if(n>=61 && n<=75) return `O ${n}`;
+    return String(n);
+}
+
+// Automatic Room Advancement & Auto-Bingo Verification by Server
+async function advanceAllRooms(){
+    try{
+        const s=await db.ref('rooms').orderByChild('state').equalTo('running').once('value');
+        const rooms=s.val()||{};
+        for(const [roomId,room] of Object.entries(rooms)){
+            const called=new Set(Object.keys(room.calledNumbers||{}).map(Number));
+            const remaining=[];
+            for(let n=1;n<=75;n++) if(!called.has(n)) remaining.push(n);
+            
+            if(!remaining.length){
+                await db.ref(`rooms/${roomId}/state`).set('finished');
+                continue;
+            }
+            const next=remaining[Math.floor(Math.random()*remaining.length)];
+            const displayStr=getBingoDisplay(next);
+            
+            await db.ref(`rooms/${roomId}/calledNumbers/${next}`).set(true);
+            await db.ref(`rooms/${roomId}/lastCalled`).set(next);
+            await db.ref(`rooms/${roomId}/lastCalledDisplay`).set(displayStr);
+
+            // Auto-Check if any player has BINGO
+            const players=room.players||{};
+            let winnerUid=null;
+            const newCalledSet=new Set([...called, next]);
+
+            for(const [pUid, pData] of Object.entries(players)){
+                const cardNo=pData.cartelaNumber;
+                if(cardNo && hasBingo(cardNo, newCalledSet)){
+                    winnerUid=pUid;
+                    break;
+                }
+            }
+
+            if(winnerUid){
+                const count=Object.keys(players).length;
+                const gross=Number(room.stake)*count;
+                const prize=Math.floor(gross*(1-HOUSE_CUT));
+
+                // Finish room and assign prize automatically
+                await db.ref(`rooms/${roomId}`).update({
+                    state:'finished',
+                    winner:winnerUid,
+                    prize,
+                    payoutStatus:'paid',
+                    finishedAt:Date.now()
+                });
+
+                // Credit winner balance
+                await db.ref(`users/${winnerUid}/balance`).transaction(v=>(num(v)||0)+prize);
+
+                // Add transaction history
+                const txId=db.ref(`users/${winnerUid}/transactions`).push().key;
+                await db.ref(`users/${winnerUid}/transactions/${txId}`).set({
+                    type:'win',
+                    amount:prize,
+                    roomId,
+                    status:'completed',
+                    createdAt:admin.database.ServerValue.TIMESTAMP
+                });
+            }
+        }
+    }catch(e){console.error('advanceAllRooms:',e.message);}
+}
 setInterval(advanceAllRooms,CALL_INTERVAL_MS);
+
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
 const PORT=Number(process.env.PORT||3000);app.listen(PORT,()=>console.log(`Beteseb Bingo listening on ${PORT}; Firebase project=${serviceAccount.project_id}`));
 
