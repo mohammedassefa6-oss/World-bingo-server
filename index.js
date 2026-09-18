@@ -1,4 +1,3 @@
-
 const express=require('express');
 const cors=require('cors');
 const crypto=require('crypto');
@@ -29,8 +28,8 @@ const ALLOWED_STAKES=new Set([10,20,50,100]);
 if(BOT_TOKEN){
     const bot = new Telegraf(BOT_TOKEN);
     
-    // Force clear old persistent menu buttons and commands from Telegram server
-    bot.telegram.call('setChatMenuButton', {
+    // Corrected method to clear old persistent menu buttons from Telegram server
+    bot.telegram.setChatMenuButton({
         menu_button: { type: 'default' }
     }).catch(err => console.log('Menu reset error:', err));
 
