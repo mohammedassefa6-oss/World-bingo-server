@@ -4,7 +4,7 @@
 .field-group{margin-bottom:10px;text-align:left}
 .field-group label{display:block;font-size:12px;color:#a9a8bf;margin-bottom:4px}
 .field-group input{width:100%;padding:10px;border-radius:8px;border:1px solid #393755;background:#101022;color:#fff}
-</style></head><body><div class="app"><div class="header"><h1>🎱 Beteseb Bingo</h1><div class="muted">Telegram Bingo Mini App</div><div class="stats"><div class="stat">💰 Balance<b id="balance">-</b></div><div class="stat">🎫 Room<b id="room">-</b></div><div class="stat">👥 Players<b id="players">-</b></div></div></div><div id="status" class="status">Connecting...</div>
+</style></head><body><div class="app"><div class="header"><h1>🎱 Beteseb Bingo</h1><div class="muted">Telegram Bingo Mini App</div><div class="stats"><div class="stat">💰 Balance<b id="balance">-</b></div><div class="stat">🎫 Free Cards<b id="freeCardsCount">0</b></div><div class="stat">👥 Room<b id="room">-</b></div></div></div><div id="status" class="status">Connecting...</div>
 <div class="tabs"><button class="active" data-page="gamePage">🎱 Game</button><button data-page="walletPage">💰 Wallet</button><button data-page="invitePage">👥 Invite</button><button data-page="historyPage">📜 History</button><button data-page="profilePage">👤 Profile</button></div>
 <section id="gamePage" class="page"><div id="stakeScreen" class="panel"><h3 class="section-title">Choose Stake</h3><div class="stake-grid"><button class="btn play" data-stake="10">Play 10</button><button class="btn play" data-stake="20">Play 20</button><button class="btn play" data-stake="50">Play 50</button><button class="btn play" data-stake="100">Play 100</button></div></div><div id="cartelaScreen" class="panel hidden"><h3 class="section-title">Choose Cartela (1–500)</h3><div id="cartelaStatus" class="status"></div><div id="cartelas" class="cartelas"></div><button id="backStake" class="btn primary">← Back</button></div><div id="liveScreen" class="panel hidden"><div class="current"><div>የተጠራው ቁጥር</div><strong id="currentNumber">-</strong></div><div class="bingo-head"><b>B</b><b>I</b><b>N</b><b>G</b><b>O</b></div><div id="card" class="card"></div><div id="gameStatusNotice" style="margin-top:12px;font-weight:bold;color:#facc15;text-align:center;"></div></div></section>
 <section id="walletPage" class="page hidden"><div class="panel"><h3 class="section-title">💰 Wallet</h3><div id="walletBalance" style="font-size:30px;color:#facc15;font-weight:bold">0 ETB</div><div class="row" style="margin-top:10px"><button id="depositBtn" class="btn success">Deposit</button><button id="withdrawBtn" class="btn danger">Withdraw</button></div>
@@ -31,9 +31,9 @@
 </div>
 
 <div id="moneyStatus" class="status"></div><p class="small" style="margin-top:10px;">Deposit/withdrawal requests are manual and require admin processing.</p></div></section>
-<section id="invitePage" class="page hidden"><div class="panel"><h3 class="section-title">👥 Invitation</h3><div id="refCode" class="ref">Loading...</div><button id="copyInvite" class="btn primary">📋 Copy Invitation Link</button><div id="refStatus" class="status"></div></div></section>
+<section id="invitePage" class="page hidden"><div class="panel"><h3 class="section-title">👥 Invitation (Referral)</h3><p class="small" style="color:#facc15; margin-bottom:10px;">ጓደኛዎን ሲጋብዙ **1 ነፃ ካርቴላ** በሽልማት ያግኙ!</p><div id="refCode" class="ref">Loading...</div><button id="copyInvite" class="btn primary" style="margin-top:10px">📋 Copy Invitation Link</button><div id="refStatus" class="status"></div></div></section>
 <section id="historyPage" class="page hidden"><div class="panel"><h3 class="section-title">📜 History</h3><div id="historyList" class="history">No history yet.</div></div></section>
-<section id="profilePage" class="page hidden"><div class="panel"><h3 class="section-title">👤 Profile</h3><div class="row"><span>Name</span><b id="profileName">-</b></div><hr><div class="row"><span>Telegram ID</span><b id="profileTelegram">-</b></div><hr><div class="row"><span>Referrals</span><b id="profileReferrals">0</b></div></div>
+<section id="profilePage" class="page hidden"><div class="panel"><h3 class="section-title">👤 Profile</h3><div class="row"><span>Name</span><b id="profileName">-</b></div><hr><div class="row"><span>Telegram ID</span><b id="profileTelegram">-</b></div><hr><div class="row"><span>Referrals</span><b id="profileReferrals">0</b></div><hr><div class="row"><span>Free Cards</span><b id="profileCards" style="color:#facc15">0</b></div></div>
 
 <div id="adminSection" class="panel hidden" style="margin-top:12px">
     <h3 class="section-title">🛠 Admin: Telebirr Settings</h3>
@@ -54,11 +54,29 @@ const $=id=>document.getElementById(id),status=t=>$('status').textContent=t;let 
 let lastSpokenNumber=null;
 
 async function api(path,options={}){const token=auth.currentUser?await auth.currentUser.getIdToken():null;const r=await fetch(path,{...options,headers:{'Content-Type':'application/json',...(options.headers||{}),...(token?{Authorization:`Bearer ${token}`}:{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`Request failed (${r.status})`);return d;}
-function syncBalance(v){const x=(Number(v)||0).toFixed(2).replace(/\.00$/,'')+' ETB';$('balance').textContent=x;$('walletBalance').textContent=x;}
+function syncBalance(data){
+    const bal=(Number(data.balance||data)||0).toFixed(2).replace(/\.00$/,'')+' ETB';$('balance').textContent=bal;
+    $('walletBalance').textContent=bal;
+    if(typeof data === 'object' && data.cards !== undefined){
+        $('freeCardsCount').textContent = data.cards;
+        $('profileCards').textContent = data.cards;
+    }
+}
 function showScreen(id){['stakeScreen','cartelaScreen','liveScreen'].forEach(x=>$(x).classList.toggle('hidden',x!==id));}
-async function login(){try{if(!tg.initData){status('⚠️ Open this app from Telegram.');return;}status('Verifying Telegram...');const d=await api('/verify-telegram-login',{method:'POST',body:JSON.stringify({initData:tg.initData})});const c=await signInWithCustomToken(auth,d.customToken);uid=c.user.uid;syncBalance(d.balance);listenBalance();await Promise.all([loadProfile(),loadReferral(),loadHistory(),loadAdmin(),loadTelebirrSettings()]);status('✅ Connected');}catch(e){console.error(e);status('⚠️ '+e.message);}}
-function listenBalance(){const r=ref(db,`users/${uid}/balance`);onValue(r,syncBalance);}
-async function loadProfile(){const p=await api('/profile');$('profileName').textContent=p.name;$('profileTelegram').textContent=p.telegramId;$('profileReferrals').textContent=p.referrals;}
+async function login(){try{if(!tg.initData){status('⚠️ Open this app from Telegram.');return;}status('Verifying Telegram...');const d=await api('/verify-telegram-login',{method:'POST',body:JSON.stringify({initData:tg.initData})});const c=await signInWithCustomToken(auth,d.customToken);uid=c.user.uid;syncBalance(d);listenBalance();await Promise.all([loadProfile(),loadReferral(),loadHistory(),loadAdmin(),loadTelebirrSettings()]);status('✅ Connected');}catch(e){console.error(e);status('⚠️ '+e.message);}}
+function listenBalance(){
+    onValue(ref(db,`users/${uid}/balance`),s=> {
+        const b = s.val()||0;
+        $('balance').textContent = Number(b).toFixed(2).replace(/\.00$/,'')+' ETB';
+        $('walletBalance').textContent = Number(b).toFixed(2).replace(/\.00$/,'')+' ETB';
+    });
+    onValue(ref(db,`users/${uid}/cards`),s=> {
+        const c = s.val()||0;
+        $('freeCardsCount').textContent = c;
+        $('profileCards').textContent = c;
+    });
+}
+async function loadProfile(){const p=await api('/profile');$('profileName').textContent=p.name;$('profileTelegram').textContent=p.telegramId;$('profileReferrals').textContent=p.referrals;$('profileCards').textContent=p.cards;}
 async function loadReferral(){const p=await api('/referral');$('refCode').textContent=p.referralCode;let base=p.linkBase;if(base){inviteLink=base+(base.includes('?')?'&':'?')+'startapp='+encodeURIComponent(p.referralCode);}else if(p.botUsername){inviteLink=`https://t.me/${p.botUsername}?startapp=${encodeURIComponent(p.referralCode)}`;}else inviteLink='';$('refStatus').textContent=inviteLink?inviteLink:'Set TELEGRAM_MINI_APP_LINK_BASE in Railway to enable the copy link.';}
 async function loadHistory(){const d=await api('/history');$('historyList').innerHTML=d.items.length?d.items.map(x=>`<div class="history-item"><b>${x.type||'transaction'}</b> — ${x.amount??''} ETB<br><span class="small">${x.status||''} ${x.transactionId?('• ID: '+x.transactionId):''}</span></div>`).join(''):'No history yet.';}
 
@@ -68,11 +86,10 @@ $('saveTelebirrBtn').onclick=async()=>{try{const phone=$('adminPhoneInput').valu
 
 async function loadAdmin(){try{const d=await api('/admin/money-requests');const pending=d.items.filter(x=>x.status==='pending');$('adminSection').classList.remove('hidden');$('adminList').innerHTML=pending.length?pending.map(r=>`<div class="history-item"><b>${r.type}</b> — ${r.amount} ETB ${r.transactionId?('<br><span style="color:#facc15">TxID: '+r.transactionId+'</span>'):''}<br><span class="small">UID: ${r.uid}</span><div class="row" style="margin-top:6px"><button class="btn success" data-a="approve" data-t="${r.type}" data-id="${r.id}">Approve</button><button class="btn danger" data-a="reject" data-t="${r.type}" data-id="${r.id}">Reject</button></div></div>`).join(''):'<p class="small">No pending requests.</p>';$('adminList').querySelectorAll('button[data-a]').forEach(btn=>btn.onclick=async()=>{try{await api(`/admin/${btn.dataset.t}/${btn.dataset.id}/${btn.dataset.a}`,{method:'POST'});loadAdmin();}catch(e){alert('⚠️ '+e.message);}});}catch(e){$('adminSection').classList.add('hidden');}}
 async function openCartelas(stake){showScreen('cartelaScreen');$('cartelaStatus').textContent='Loading cartelas...';const g=$('cartelas');g.innerHTML='';try{const d=await api('/room-taken?stake='+stake);const taken=d.taken||{};for(let n=1;n<=500;n++){const b=document.createElement('button');b.textContent=n;b.disabled=!!taken[n];b.onclick=()=>join(stake,n);g.appendChild(b);}$('cartelaStatus').textContent='';}catch(e){$('cartelaStatus').textContent='⚠️ '+e.message;}}
-async function join(stake,n){try{status('Joining room...');const d=await api('/join-room',{method:'POST',body:JSON.stringify({stake,cartelaNumber:n})});roomId=d.roomId;card=d.yourCard;syncBalance(d.balance);$('room').textContent=roomId;$('players').textContent=d.playerCount;renderCard();listenRoom(roomId);showScreen('liveScreen');status(d.playerCount>=2?'🎮 Game started!':'⏳ Waiting for another player...');}catch(e){status('⚠️ '+e.message);}}
+async function join(stake,n){try{status('Joining room...');const d=await api('/join-room',{method:'POST',body:JSON.stringify({stake,cartelaNumber:n})});roomId=d.roomId;card=d.yourCard;syncBalance({balance:d.balance,cards:d.cards});$('room').textContent=roomId;$('players').textContent=d.playerCount;renderCard();listenRoom(roomId);showScreen('liveScreen');status(d.playerCount>=2?'🎮 Game started!':'⏳ Waiting for another player...');}catch(e){status('⚠️ '+e.message);}}
 
 function renderCard(){if(!card)return;const el=$('card');el.innerHTML='';for(let r=0;r<5;r++)for(const c of ['B','I','N','G','O']){const v=card[c][r],x=document.createElement('div');x.className='cell';x.textContent=v;if(v==='FREE')x.classList.add('free','marked');else if(called.has(Number(v)))x.classList.add('marked');el.appendChild(x);}}
 
-// Text-to-Speech function to call out numbers like "G 57"
 function speakNumber(text){
     if('speechSynthesis' in window && text){
         const utterance = new SpeechSynthesisUtterance(text);
@@ -94,7 +111,6 @@ function listenRoom(id){
         $('players').textContent=Object.keys(r.players||{}).length;
         renderCard();
 
-        // Voice call check
         if(r.lastCalled && r.lastCalled !== lastSpokenNumber){
             lastSpokenNumber = r.lastCalled;
             speakNumber(displayVal);
