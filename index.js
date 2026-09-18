@@ -24,64 +24,68 @@ const HOUSE_CUT=Math.min(Math.max(Number(process.env.HOUSE_CUT||0.20),0),1);
 const CALL_INTERVAL_MS=Math.max(Number(process.env.CALL_INTERVAL_MS||3000),1000);
 const ALLOWED_STAKES=new Set([10,20,50,100]);
 
-// Initialize Telegraf Bot for Main Menu Buttons & Commands
+// Telegraf Bot Setup
 if(BOT_TOKEN){
     const bot = new Telegraf(BOT_TOKEN);
     
     bot.start(async (ctx) => {
-        const userId = ctx.from.id;
-        const uid = `tg_${userId}`;
-        const startPayload = ctx.payload || '';
-        
-        const userRef = db.ref(`users/${uid}`);
-        const snap = await userRef.once('value');
-        
-        if(!snap.exists()){
-            const code = String(userId);
-            await userRef.set({
-                balance: 0,
-                referrals: 0,
-                cards: 0,
-                hasDeposited: false,
-                name: ctx.from.first_name || 'Player',
-                telegramId: userId,
-                referralCode: code,
-                createdAt: admin.database.ServerValue.TIMESTAMP
-            });
-            await db.ref(`referralCodes/${code}`).set(uid);
+        try {
+            const userId = ctx.from.id;
+            const uid = `tg_${userId}`;
+            const startPayload = ctx.payload || '';
             
-            if(startPayload){
-                const refSnap = await db.ref(`referralCodes/${String(startPayload)}`).once('value');
-                const refUid = refSnap.val();
-                if(refUid && refUid !== uid){
-                    await db.ref(`users/${refUid}/referrals`).transaction(v => (Number(v)||0) + 1);
-                    await db.ref(`users/${refUid}/cards`).transaction(v => (Number(v)||0) + 1);
-                    await userRef.update({ referredBy: refUid });
+            const userRef = db.ref(`users/${uid}`);
+            const snap = await userRef.once('value');
+            
+            if(!snap.exists()){
+                const code = String(userId);
+                await userRef.set({
+                    balance: 0,
+                    referrals: 0,
+                    cards: 0,
+                    hasDeposited: false,
+                    name: ctx.from.first_name || 'Player',
+                    telegramId: userId,
+                    referralCode: code,
+                    createdAt: admin.database.ServerValue.TIMESTAMP
+                });
+                await db.ref(`referralCodes/${code}`).set(uid);
+                
+                if(startPayload){
+                    const refSnap = await db.ref(`referralCodes/${String(startPayload)}`).once('value');
+                    const refUid = refSnap.val();
+                    if(refUid && refUid !== uid){
+                        await db.ref(`users/${refUid}/referrals`).transaction(v => (Number(v)||0) + 1);
+                        await db.ref(`users/${refUid}/cards`).transaction(v => (Number(v)||0) + 1);
+                        await userRef.update({ referredBy: refUid });
+                    }
                 }
             }
+            
+            const webAppUrl = MINI_APP_LINK_BASE || `https://t.me/${BOT_USERNAME}`;
+            
+            await ctx.reply(
+                `👋 Welcome to Beteseb Bingo! Choose an Option below.`,
+                Markup.inlineKeyboard([
+                    [Markup.button.webApp('🎮 Play', webAppUrl), Markup.button.callback('📝 Register', 'menu_register')],
+                    [Markup.button.callback('💰 Check Balance', 'menu_balance'), Markup.button.callback('💳 Deposit', 'menu_deposit')],
+                    [Markup.button.callback('📞 Contact Support', 'menu_support'), Markup.button.callback('📖 Instruction', 'menu_instruction')],
+                    [Markup.button.callback('🎁 Transfer', 'menu_transfer'), Markup.button.callback('💸 Withdraw', 'menu_withdraw')],
+                    [Markup.button.callback('👥 Invite', 'menu_invite'), Markup.button.callback('🔄 Convert Bonus', 'menu_convert')]
+                ])
+            );
+        } catch(e) {
+            console.error('Bot start error:', e);
         }
-        
-        const webAppUrl = MINI_APP_LINK_BASE || `https://t.me/${BOT_USERNAME}`;
-        
-        await ctx.reply(
-            `👋 Welcome to Beteseb Bingo! Choose an Option below.`,
-            Markup.inlineKeyboard([
-                [Markup.button.webApp('🎮 Play', webAppUrl), Markup.button.callback('📝 Register', 'menu_register')],
-                [Markup.button.callback('💰 Check Balance', 'menu_balance'), Markup.button.callback('💳 Deposit', 'menu_deposit')],
-                [Markup.button.callback('📞 Contact Support', 'menu_support'), Markup.button.callback('📖 Instruction', 'menu_instruction')],
-                [Markup.button.callback('🎁 Transfer', 'menu_transfer'), Markup.button.callback('💸 Withdraw', 'menu_withdraw')],
-                [Markup.button.callback('👥 Invite', 'menu_invite'), Markup.button.callback('🔄 Convert Bonus', 'menu_convert')]
-            ])
-        );
     });
 
     bot.action('menu_register', async (ctx) => {
-        await ctx.answerCbQuery();
+        try { await ctx.answerCbQuery(); } catch(e){}
         await ctx.reply('📝 ለመመዝገብ ወይም መረጃዎን ለማየት ከላይ ያለውን የ "Play" ሚኒ አፕ ሊንክ ይጫኑ!');
     });
 
     bot.action('menu_balance', async (ctx) => {
-        await ctx.answerCbQuery();
+        try { await ctx.answerCbQuery(); } catch(e){}
         const uid = `tg_${ctx.from.id}`;
         const s = await db.ref(`users/${uid}/balance`).once('value');
         const cardsSnap = await db.ref(`users/${uid}/cards`).once('value');
@@ -91,19 +95,19 @@ if(BOT_TOKEN){
     });
 
     bot.action('menu_deposit', async (ctx) => {
-        await ctx.answerCbQuery();
+        try { await ctx.answerCbQuery(); } catch(e){}
         const teleNum = (await db.ref('settings/telebirrNumber').once('value')).val() || '+251914338110';
         const teleName = (await db.ref('settings/telebirrName').once('value')).val() || 'Mohammed Assefa';
         await ctx.reply(`💳 **የዲፖዚት መረጃ**\n\nእባክዎ ገንዘብ ያስተላልፉበት:\n📱 ቁጥር: ${teleNum}\n👤 ስም: ${teleName}\n\nከዚያም የሚኒ አፕ Wallet ገጽ በመክፈት የ Transaction ID ይላኩ።`, {parse_mode: 'Markdown'});
     });
 
     bot.action('menu_withdraw', async (ctx) => {
-        await ctx.answerCbQuery();
+        try { await ctx.answerCbQuery(); } catch(e){}
         await ctx.reply('💸 ገንዘብ ለማውጣት ሚኒ አፕ (Mini App) ውስጥ ወደ Wallet ገጽ በመሄድ Withdraw የሚለውን ቁልፍ ይጫኑ።');
     });
 
     bot.action('menu_invite', async (ctx) => {
-        await ctx.answerCbQuery();
+        try { await ctx.answerCbQuery(); } catch(e){}
         const uid = `tg_${ctx.from.id}`;
         const pSnap = await db.ref(`users/${uid}`).once('value');
         const p = pSnap.val() || {};
@@ -113,7 +117,7 @@ if(BOT_TOKEN){
     });
 
     bot.action(['menu_support', 'menu_instruction', 'menu_transfer', 'menu_convert'], async (ctx) => {
-        await ctx.answerCbQuery();
+        try { await ctx.answerCbQuery(); } catch(e){}
         await ctx.reply('✨ ይህ አገልግሎት በሚኒ አፕ (Mini App) ውስጥ በቅርቡ ሙሉ በሙሉ ይስተካከላል!');
     });
 
@@ -295,3 +299,4 @@ setInterval(advanceAllRooms,CALL_INTERVAL_MS);
 
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
 const PORT=Number(process.env.PORT||3000);app.listen(PORT,()=>console.log(`Beteseb Bingo listening on ${PORT}`));
+
