@@ -299,4 +299,3 @@ setInterval(advanceAllRooms,CALL_INTERVAL_MS);
 
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
 const PORT=Number(process.env.PORT||3000);app.listen(PORT,()=>console.log(`Beteseb Bingo listening on ${PORT}`));
-
