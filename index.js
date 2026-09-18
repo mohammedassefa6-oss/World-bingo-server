@@ -3,6 +3,7 @@ const cors=require('cors');
 const crypto=require('crypto');
 const path=require('path');
 const admin=require('firebase-admin');
+const {Telegraf, Markup}=require('telegraf');
 const {getCard,hasBingo}=require('./cartela');
 
 const serviceAccountJson=Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64||'','base64').toString('utf8');
@@ -22,6 +23,102 @@ const ADMIN_UIDS=String(process.env.ADMIN_UIDS||'').split(',').map(x=>x.trim()).
 const HOUSE_CUT=Math.min(Math.max(Number(process.env.HOUSE_CUT||0.20),0),1);
 const CALL_INTERVAL_MS=Math.max(Number(process.env.CALL_INTERVAL_MS||3000),1000);
 const ALLOWED_STAKES=new Set([10,20,50,100]);
+
+// Initialize Telegraf Bot for Main Menu Buttons & Commands
+if(BOT_TOKEN){
+    const bot = new Telegraf(BOT_TOKEN);
+    
+    bot.start(async (ctx) => {
+        const userId = ctx.from.id;
+        const uid = `tg_${userId}`;
+        const startPayload = ctx.payload || '';
+        
+        const userRef = db.ref(`users/${uid}`);
+        const snap = await userRef.once('value');
+        
+        if(!snap.exists()){
+            const code = String(userId);
+            await userRef.set({
+                balance: 0,
+                referrals: 0,
+                cards: 0,
+                hasDeposited: false,
+                name: ctx.from.first_name || 'Player',
+                telegramId: userId,
+                referralCode: code,
+                createdAt: admin.database.ServerValue.TIMESTAMP
+            });
+            await db.ref(`referralCodes/${code}`).set(uid);
+            
+            if(startPayload){
+                const refSnap = await db.ref(`referralCodes/${String(startPayload)}`).once('value');
+                const refUid = refSnap.val();
+                if(refUid && refUid !== uid){
+                    await db.ref(`users/${refUid}/referrals`).transaction(v => (Number(v)||0) + 1);
+                    await db.ref(`users/${refUid}/cards`).transaction(v => (Number(v)||0) + 1);
+                    await userRef.update({ referredBy: refUid });
+                }
+            }
+        }
+        
+        const webAppUrl = MINI_APP_LINK_BASE || `https://t.me/${BOT_USERNAME}`;
+        
+        await ctx.reply(
+            `👋 Welcome to Beteseb Bingo! Choose an Option below.`,
+            Markup.inlineKeyboard([
+                [Markup.button.webApp('🎮 Play', webAppUrl), Markup.button.callback('📝 Register', 'menu_register')],
+                [Markup.button.callback('💰 Check Balance', 'menu_balance'), Markup.button.callback('💳 Deposit', 'menu_deposit')],
+                [Markup.button.callback('📞 Contact Support', 'menu_support'), Markup.button.callback('📖 Instruction', 'menu_instruction')],
+                [Markup.button.callback('🎁 Transfer', 'menu_transfer'), Markup.button.callback('💸 Withdraw', 'menu_withdraw')],
+                [Markup.button.callback('👥 Invite', 'menu_invite'), Markup.button.callback('🔄 Convert Bonus', 'menu_convert')]
+            ])
+        );
+    });
+
+    bot.action('menu_register', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply('📝 ለመመዝገብ ወይም መረጃዎን ለማየት ከላይ ያለውን የ "Play" ሚኒ አፕ ሊንክ ይጫኑ!');
+    });
+
+    bot.action('menu_balance', async (ctx) => {
+        await ctx.answerCbQuery();
+        const uid = `tg_${ctx.from.id}`;
+        const s = await db.ref(`users/${uid}/balance`).once('value');
+        const cardsSnap = await db.ref(`users/${uid}/cards`).once('value');
+        const bal = s.val() || 0;
+        const cards = cardsSnap.val() || 0;
+        await ctx.reply(`💰 የእርስዎ ባላንስ: ${bal} ETB\n🎫 ነፃ ካርቴላዎች: ${cards}`);
+    });
+
+    bot.action('menu_deposit', async (ctx) => {
+        await ctx.answerCbQuery();
+        const teleNum = (await db.ref('settings/telebirrNumber').once('value')).val() || '+251914338110';
+        const teleName = (await db.ref('settings/telebirrName').once('value')).val() || 'Mohammed Assefa';
+        await ctx.reply(`💳 **የዲፖዚት መረጃ**\n\nእባክዎ ገንዘብ ያስተላልፉበት:\n📱 ቁጥር: ${teleNum}\n👤 ስም: ${teleName}\n\nከዚያም የሚኒ አፕ Wallet ገጽ በመክፈት የ Transaction ID ይላኩ።`, {parse_mode: 'Markdown'});
+    });
+
+    bot.action('menu_withdraw', async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply('💸 ገንዘብ ለማውጣት ሚኒ አፕ (Mini App) ውስጥ ወደ Wallet ገጽ በመሄድ Withdraw የሚለውን ቁልፍ ይጫኑ።');
+    });
+
+    bot.action('menu_invite', async (ctx) => {
+        await ctx.answerCbQuery();
+        const uid = `tg_${ctx.from.id}`;
+        const pSnap = await db.ref(`users/${uid}`).once('value');
+        const p = pSnap.val() || {};
+        const code = p.referralCode || String(ctx.from.id);
+        const link = MINI_APP_LINK_BASE ? `${MINI_APP_LINK_BASE}?startapp=${code}` : `https://t.me/${BOT_USERNAME}?startapp=${code}`;
+        await ctx.reply(`👥 **የጓደኛ ማግበሪያ (Referral Link)**\n\nይህንን ሊንክ ለጓደኛዎ በመላክ 1 ነፃ ካርቴላ ይሸለሙ:\n${link}`);
+    });
+
+    bot.action(['menu_support', 'menu_instruction', 'menu_transfer', 'menu_convert'], async (ctx) => {
+        await ctx.answerCbQuery();
+        await ctx.reply('✨ ይህ አገልግሎት በሚኒ አፕ (Mini App) ውስጥ በቅርቡ ሙሉ በሙሉ ይስተካከላል!');
+    });
+
+    bot.launch().catch(e => console.log('Bot launch error:', e));
+}
 
 const num=v=>{if(v===null||v===undefined||v==='')return null;const n=Number(v);return Number.isFinite(n)?n:null;};
 const posInt=v=>{const n=num(v);return n!==null&&Number.isInteger(n)&&n>0?n:null;};
@@ -46,7 +143,6 @@ app.get('/profile',auth,async(req,res)=>{const p=await profile(req.uid);res.json
 app.get('/referral',auth,async(req,res)=>{const p=await profile(req.uid);res.json({referralCode:p.referralCode||req.uid.slice(3),referrals:Number(p.referrals||0),cards:Number(p.cards||0),botUsername:BOT_USERNAME,linkBase:MINI_APP_LINK_BASE});});
 app.get('/history',auth,async(req,res)=>{try{const s=await db.ref(`users/${req.uid}/transactions`).orderByChild('createdAt').limitToLast(100).once('value');const raw=s.val()||{};const items=Object.entries(raw).map(([id,v])=>({id,...v})).sort((a,b)=>Number(b.createdAt||0)-Number(a.createdAt||0));res.json({items});}catch(e){res.status(500).json({error:'Could not load history'});}});
 
-// Telebirr Settings API
 app.get('/settings/telebirr', async (req, res) => {
     try {
         const snap = await db.ref('settings/telebirrNumber').once('value');
@@ -69,7 +165,6 @@ app.post('/admin/settings/telebirr', adminOnly, async (req, res) => {
     }
 });
 
-// Deposit Request with Duplicate Transaction ID Check (Anti-Fraud)
 app.post('/deposit-request',auth,async(req,res)=>{
     try{
         const amount=money(req.body.amount);
@@ -77,10 +172,9 @@ app.post('/deposit-request',auth,async(req,res)=>{
         const transactionId=String(req.body.transactionId||'').trim();
         if(!transactionId)return res.status(400).json({error:'Transaction ID is required'});
 
-        // Check if transaction ID has already been used across the system
         const txCheckSnap=await db.ref('usedTransactionIds').child(transactionId).once('value');
         if(txCheckSnap.exists()){
-            return res.status(400).json({error:'ይህ የቴሌብር Transaction ID ከዚህ በፊት ጥቅም ላይ ውሏል! እባክዎ ትክክለኛ ቁጥር ያስገቡ።'});
+            return res.status(400).json({error:'ይህ የቴሌብር Transaction ID ከዚህ በፊት ጥቅም ላይ ውሏል!'});
         }
 
         const id=db.ref('moneyRequests').push().key;
@@ -88,7 +182,6 @@ app.post('/deposit-request',auth,async(req,res)=>{
         const updates={};
         updates[`moneyRequests/${id}`]=request;
         updates[`users/${req.uid}/transactions/${id}`]=request;
-        // Temporarily reserve the transaction ID to prevent reuse while pending
         updates[`usedTransactionIds/${transactionId}`]=req.uid;
 
         await db.ref().update(updates);
@@ -98,7 +191,6 @@ app.post('/deposit-request',auth,async(req,res)=>{
 
 app.post('/withdrawal-request',auth,async(req,res)=>{try{const amount=money(req.body.amount);if(amount===null)return res.status(400).json({error:'Invalid withdrawal amount'});const balRef=db.ref(`users/${req.uid}/balance`);const tx=await balRef.transaction(v=>{const b=num(v);if(b===null||b<amount)return;return Math.round((b-amount)*100)/100;});if(!tx.committed)return res.status(412).json({error:'Insufficient balance'});const id=db.ref('moneyRequests').push().key;const request={uid:req.uid,type:'withdrawal',amount,status:'pending',createdAt:admin.database.ServerValue.TIMESTAMP};const updates={};updates[`moneyRequests/${id}`]=request;updates[`users/${req.uid}/transactions/${id}`]=request;try{await db.ref().update(updates);}catch(e){await balRef.transaction(v=>(num(v)||0)+amount);throw e;}res.json({requestId:id,status:'pending',balance:num(tx.snapshot.val())||0});}catch(e){console.error(e);res.status(500).json({error:'Could not create withdrawal request'});}});
 
-// Join Room using Free Card if available, otherwise from Balance
 app.post('/join-room',auth,async(req,res)=>{try{const stake=posInt(req.body.stake),cardNo=posInt(req.body.cartelaNumber);if(!ALLOWED_STAKES.has(stake))return res.status(400).json({error:'Invalid room stake'});if(cardNo===null||cardNo>500)return res.status(400).json({error:'Invalid cartela number'});const roomId=`stake_${stake}_open`,roomRef=db.ref(`rooms/${roomId}`),userRef=db.ref(`users/${req.uid}`),balRef=userRef.child('balance'),cardsRef=userRef.child('cards');
  
  let usedFreeCard=false;
@@ -107,7 +199,7 @@ app.post('/join-room',auth,async(req,res)=>{try{const stake=posInt(req.body.stak
      usedFreeCard=true;
  }else{
      const btx=await balRef.transaction(v=>{const b=num(v);if(b===null||b<stake)return;return Math.round((b-stake)*100)/100;});
-     if(!btx.committed){const b=num(btx.snapshot.val());return res.status(412).json({error:b===null?'Balance unavailable. Please try again.':`Insufficient balance or free cards. You have ${b} ETB and 0 free cards; ${stake} ETB is required.`});}
+     if(!btx.committed){const b=num(btx.snapshot.val());return res.status(412).json({error:`Insufficient balance or free cards.`});}
  }
 
  const jtx=await roomRef.transaction(room=>{room=room||{stake,state:'waiting',players:{},taken:{}};if(room.state!=='waiting'||Number(room.stake)!==stake)return;room.players=room.players||{};room.taken=room.taken||{};if(room.players[req.uid])return; if(room.taken[String(cardNo)])return;room.players[req.uid]={cartelaNumber:cardNo,joinedAt:Date.now()};room.taken[String(cardNo)]=true;return room;});
@@ -131,36 +223,24 @@ async function processMoney(req,res,type,status){try{const id=String(req.params.
      const userRef=db.ref(`users/${r.uid}`);
      const userSnap=await userRef.once('value');
      const userData=userSnap.val()||{};
-     
      let addAmount = Number(r.amount);
      let bonusAdded = false;
 
      if(!userData.hasDeposited){
-         addAmount += 10; // First Deposit 10 ETB Bonus
+         addAmount += 10;
          bonusAdded = true;
          await userRef.update({ hasDeposited: true });
      }
 
      await userRef.child('balance').transaction(v=>(num(v)||0)+addAmount);
-     
      if(bonusAdded){
          const bonusTxId=db.ref(`users/${r.uid}/transactions`).push().key;
-         await db.ref(`users/${r.uid}/transactions/${bonusTxId}`).set({
-             type:'bonus',
-             amount:10,
-             status:'completed',
-             createdAt:admin.database.ServerValue.TIMESTAMP
-         });
+         await db.ref(`users/${r.uid}/transactions/${bonusTxId}`).set({type:'bonus',amount:10,status:'completed',createdAt:admin.database.ServerValue.TIMESTAMP});
      }
  }
- 
- if(type==='deposit'&&status==='rejected'){
-     // If rejected, free up the transaction ID so it can be corrected or reused if legitimate
-     if(r.transactionId){
-         await db.ref(`usedTransactionIds/${r.transactionId}`).remove();
-     }
+ if(type==='deposit'&&status==='rejected'&&r.transactionId){
+     await db.ref(`usedTransactionIds/${r.transactionId}`).remove();
  }
-
  if(type==='withdrawal'&&status==='rejected'){await db.ref(`users/${r.uid}/balance`).transaction(v=>(num(v)||0)+Number(r.amount));}
  const now=admin.database.ServerValue.TIMESTAMP;const updates={};updates[`moneyRequests/${id}/status`]=status;updates[`moneyRequests/${id}/processedAt`]=now;updates[`moneyRequests/${id}/processedBy`]=req.uid;updates[`users/${r.uid}/transactions/${id}/status`]=status;updates[`users/${r.uid}/transactions/${id}/processedAt`]=now;updates[`users/${r.uid}/transactions/${id}/processedBy`]=req.uid;await db.ref().update(updates);res.json({ok:true,status,balance:num((await db.ref(`users/${r.uid}/balance`).once('value')).val())||0});}catch(e){console.error(e);res.status(500).json({error:'Could not process request'});}}
 
@@ -186,53 +266,27 @@ async function advanceAllRooms(){
             const called=new Set(Object.keys(room.calledNumbers||{}).map(Number));
             const remaining=[];
             for(let n=1;n<=75;n++) if(!called.has(n)) remaining.push(n);
-            
-            if(!remaining.length){
-                await db.ref(`rooms/${roomId}/state`).set('finished');
-                continue;
-            }
+            if(!remaining.length){await db.ref(`rooms/${roomId}/state`).set('finished');continue;}
             const next=remaining[Math.floor(Math.random()*remaining.length)];
             const displayStr=getBingoDisplay(next);
-            
             await db.ref(`rooms/${roomId}/calledNumbers/${next}`).set(true);
             await db.ref(`rooms/${roomId}/lastCalled`).set(next);
             await db.ref(`rooms/${roomId}/lastCalledDisplay`).set(displayStr);
-
             const players=room.players||{};
             let winnerUid=null;
             const newCalledSet=new Set([...called, next]);
-
             for(const [pUid, pData] of Object.entries(players)){
                 const cardNo=pData.cartelaNumber;
-                if(cardNo && hasBingo(cardNo, newCalledSet)){
-                    winnerUid=pUid;
-                    break;
-                }
+                if(cardNo && hasBingo(cardNo, newCalledSet)){winnerUid=pUid;break;}
             }
-
             if(winnerUid){
                 const count=Object.keys(players).length;
                 const gross=Number(room.stake)*count;
                 const prize=Math.floor(gross*(1-HOUSE_CUT));
-
-                await db.ref(`rooms/${roomId}`).update({
-                    state:'finished',
-                    winner:winnerUid,
-                    prize,
-                    payoutStatus:'paid',
-                    finishedAt:Date.now()
-                });
-
+                await db.ref(`rooms/${roomId}`).update({state:'finished',winner:winnerUid,prize,payoutStatus:'paid',finishedAt:Date.now()});
                 await db.ref(`users/${winnerUid}/balance`).transaction(v=>(num(v)||0)+prize);
-
                 const txId=db.ref(`users/${winnerUid}/transactions`).push().key;
-                await db.ref(`users/${winnerUid}/transactions/${txId}`).set({
-                    type:'win',
-                    amount:prize,
-                    roomId,
-                    status:'completed',
-                    createdAt:admin.database.ServerValue.TIMESTAMP
-                });
+                await db.ref(`users/${winnerUid}/transactions/${txId}`).set({type:'win',amount:prize,roomId,status:'completed',createdAt:admin.database.ServerValue.TIMESTAMP});
             }
         }
     }catch(e){console.error('advanceAllRooms:',e.message);}
@@ -240,4 +294,4 @@ async function advanceAllRooms(){
 setInterval(advanceAllRooms,CALL_INTERVAL_MS);
 
 app.get('*',(req,res)=>res.sendFile(path.join(__dirname,'public','index.html')));
-const PORT=Number(process.env.PORT||3000);app.listen(PORT,()=>console.log(`Beteseb Bingo listening on ${PORT}; Firebase project=${serviceAccount.project_id}`));
+const PORT=Number(process.env.PORT||3000);app.listen(PORT,()=>console.log(`Beteseb Bingo listening on ${PORT}`));
