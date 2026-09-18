@@ -1,3 +1,4 @@
+
 const express=require('express');
 const cors=require('cors');
 const crypto=require('crypto');
@@ -24,16 +25,9 @@ const HOUSE_CUT=Math.min(Math.max(Number(process.env.HOUSE_CUT||0.20),0),1);
 const CALL_INTERVAL_MS=Math.max(Number(process.env.CALL_INTERVAL_MS||3000),1000);
 const ALLOWED_STAKES=new Set([10,20,50,100]);
 
-// Professional Telegraf Setup matching top Telegram Mini Apps
+// Telegraf Bot Setup
 if(BOT_TOKEN){
     const bot = new Telegraf(BOT_TOKEN);
-    
-    // Corrected method to clear old persistent menu buttons from Telegram server
-    bot.telegram.setChatMenuButton({
-        menu_button: { type: 'default' }
-    }).catch(err => console.log('Menu reset error:', err));
-
-    bot.telegram.setMyCommands([]).catch(err => console.log('Commands reset error:', err));
     
     bot.start(async (ctx) => {
         try {
@@ -72,17 +66,14 @@ if(BOT_TOKEN){
             const webAppUrl = MINI_APP_LINK_BASE || `https://t.me/${BOT_USERNAME}`;
             
             await ctx.reply(
-                `👋 **Welcome to Beteseb Bingo!**\n\nChoose an option below to play, check your balance, or manage your account:`,
-                {
-                    parse_mode: 'Markdown',
-                    ...Markup.inlineKeyboard([
-                        [Markup.button.webApp('🎮 Play Game', webAppUrl), Markup.button.callback('📝 Register', 'menu_register')],
-                        [Markup.button.callback('💰 Check Balance', 'menu_balance'), Markup.button.callback('💳 Deposit', 'menu_deposit')],
-                        [Markup.button.callback('📞 Contact Support', 'menu_support'), Markup.button.callback('📖 Instruction', 'menu_instruction')],
-                        [Markup.button.callback('🎁 Transfer', 'menu_transfer'), Markup.button.callback('💸 Withdraw', 'menu_withdraw')],
-                        [Markup.button.callback('👥 Invite Friends', 'menu_invite'), Markup.button.callback('🔄 Convert Bonus', 'menu_convert')]
-                    ])
-                }
+                `👋 Welcome to Beteseb Bingo! Choose an Option below.`,
+                Markup.inlineKeyboard([
+                    [Markup.button.webApp('🎮 Play', webAppUrl), Markup.button.callback('📝 Register', 'menu_register')],
+                    [Markup.button.callback('💰 Check Balance', 'menu_balance'), Markup.button.callback('💳 Deposit', 'menu_deposit')],
+                    [Markup.button.callback('📞 Contact Support', 'menu_support'), Markup.button.callback('📖 Instruction', 'menu_instruction')],
+                    [Markup.button.callback('🎁 Transfer', 'menu_transfer'), Markup.button.callback('💸 Withdraw', 'menu_withdraw')],
+                    [Markup.button.callback('👥 Invite', 'menu_invite'), Markup.button.callback('🔄 Convert Bonus', 'menu_convert')]
+                ])
             );
         } catch(e) {
             console.error('Bot start error:', e);
@@ -91,7 +82,7 @@ if(BOT_TOKEN){
 
     bot.action('menu_register', async (ctx) => {
         try { await ctx.answerCbQuery(); } catch(e){}
-        await ctx.reply('📝 ለመመዝገብ ወይም አካውንትዎን ለማስተካከል ከላይ ያለውን የ "Play Game" ሚኒ አፕ ሊንክ ይጫኑ!');
+        await ctx.reply('📝 ለመመዝገብ ወይም መረጃዎን ለማየት ከላይ ያለውን የ "Play" ሚኒ አፕ ሊንክ ይጫኑ!');
     });
 
     bot.action('menu_balance', async (ctx) => {
@@ -101,14 +92,14 @@ if(BOT_TOKEN){
         const cardsSnap = await db.ref(`users/${uid}/cards`).once('value');
         const bal = s.val() || 0;
         const cards = cardsSnap.val() || 0;
-        await ctx.reply(`💰 **የእርስዎ አካውንት መረጃ**\n\n- ባላንስ: *${bal} ETB*\n- ነፃ ካርቴላዎች: *${cards}*`, {parse_mode: 'Markdown'});
+        await ctx.reply(`💰 የእርስዎ ባላንስ: ${bal} ETB\n🎫 ነፃ ካርቴላዎች: ${cards}`);
     });
 
     bot.action('menu_deposit', async (ctx) => {
         try { await ctx.answerCbQuery(); } catch(e){}
         const teleNum = (await db.ref('settings/telebirrNumber').once('value')).val() || '+251914338110';
         const teleName = (await db.ref('settings/telebirrName').once('value')).val() || 'Mohammed Assefa';
-        await ctx.reply(`💳 **የዲፖዚት (Deposit) መረጃ**\n\nእባክዎ ገንዘብ ያስተላልፉበት:\n📱 ቁጥር: \`${teleNum}\`\n👤 ስም: *${teleName}*\n\nከዚያም ሚኒ አፕ (Mini App) ውስጥ በመግባት Wallet ገጽ ላይ የ Transaction ID ያስገቡ።`, {parse_mode: 'Markdown'});
+        await ctx.reply(`💳 **የዲፖዚት መረጃ**\n\nእባክዎ ገንዘብ ያስተላልፉበት:\n📱 ቁጥር: ${teleNum}\n👤 ስም: ${teleName}\n\nከዚያም የሚኒ አፕ Wallet ገጽ በመክፈት የ Transaction ID ይላኩ።`, {parse_mode: 'Markdown'});
     });
 
     bot.action('menu_withdraw', async (ctx) => {
