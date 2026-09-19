@@ -1,0 +1,7 @@
+const COLUMN_RANGES = { B:[1,15], I:[16,30], N:[31,45], G:[46,60], O:[61,75] };
+function mulberry32(seed){return function(){seed|=0;seed=(seed+0x6d2b79f5)|0;let t=Math.imul(seed^(seed>>>15),1|seed);t=(t+Math.imul(t^(t>>>7),61|t))^t;return((t^(t>>>14))>>>0)/4294967296;};}
+function shuffle(arr,rng){const a=arr.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(rng()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
+const SEED_BASE=20240101;
+function getCard(cartelaNumber){const n=Number(cartelaNumber);if(!Number.isInteger(n)||n<1||n>500)throw new Error('Invalid cartela number');const rng=mulberry32(SEED_BASE+n);const card={};for(const col of Object.keys(COLUMN_RANGES)){const [low,high]=COLUMN_RANGES[col];const pool=[];for(let x=low;x<=high;x++)pool.push(x);card[col]=shuffle(pool,rng).slice(0,5);}card.N[2]='FREE';return card;}
+function hasBingo(cartelaNumber,calledSet){const card=getCard(cartelaNumber);const cols=['B','I','N','G','O'];const marked=(c,v)=>v==='FREE'||calledSet.has(Number(v));for(let r=0;r<5;r++)if(cols.every(c=>marked(c,card[c][r])))return true;for(const c of cols)if(card[c].every(v=>marked(c,v)))return true;if(cols.every((c,i)=>marked(c,card[c][i])))return true;if(cols.every((c,i)=>marked(c,card[c][4-i])))return true;const corners=[[cols[0],card.B[0]],[cols[0],card.B[4]],[cols[4],card.O[0]],[cols[4],card.O[4]]];return corners.every(([c,v])=>marked(c,v));}
+module.exports={getCard,hasBingo};
