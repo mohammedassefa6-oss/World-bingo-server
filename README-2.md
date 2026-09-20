@@ -1,3 +1,4 @@
+
 # Beteseb Bingo — chat-menu build (no Mini App needed to play)
 
 ## What changed
