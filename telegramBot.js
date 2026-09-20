@@ -1,3 +1,4 @@
+
 // telegramBot.js — full "menu inside Telegram chat" experience (no Mini App needed).
 // Everything (Register, Balance, Deposit, Withdraw, Transfer, Invite, Support,
 // Instructions, Convert Bonus, and the Bingo game itself) runs as bot messages
@@ -12,7 +13,7 @@ const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ALLOWED_STAKES = [10, 20, 50, 100];
 const HOUSE_CUT = Math.min(Math.max(Number(process.env.HOUSE_CUT || 0.20), 0), 1);
 const CALL_INTERVAL_MS = Math.max(Number(process.env.CALL_INTERVAL_MS || 3000), 1000);
-const MAX_CARTELA = 600;
+const MAX_CARTELA = 500;
 const CARDS_PER_PAGE = 96; // 8 columns x 12 rows, same layout as the reference bot
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || '@BetesebSupport';
 const BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || '').replace(/^@/, '');
