@@ -1,11 +1,10 @@
-
 // telegramBot.js — full "menu inside Telegram chat" experience (no Mini App needed).
 // Everything (Register, Balance, Deposit, Withdraw, Transfer, Invite, Support,
 // Instructions, Convert Bonus, and the Bingo game itself) runs as bot messages
 // and inline keyboards.
 
 const crypto = require('crypto');
-const { getCard, hasBingo } = require('./cartela');
+const { getCard, hasBingo, letterFor } = require('./cartela');
 const telebirr = require('./telebirr');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
@@ -13,6 +12,7 @@ const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 const ALLOWED_STAKES = [10, 20, 50, 100];
 const HOUSE_CUT = Math.min(Math.max(Number(process.env.HOUSE_CUT || 0.20), 0), 1);
 const CALL_INTERVAL_MS = Math.max(Number(process.env.CALL_INTERVAL_MS || 3000), 1000);
+const CARTELA_SELECTION_SECONDS = Math.max(Number(process.env.CARTELA_SELECTION_SECONDS || 45), 10);
 const MAX_CARTELA = 500;
 const CARDS_PER_PAGE = 96; // 8 columns x 12 rows, same layout as the reference bot
 const SUPPORT_CONTACT = process.env.SUPPORT_CONTACT || '@BetesebSupport';
@@ -108,9 +108,17 @@ module.exports = function createBot(db, admin) {
   }
 
   // ---------------- Balance / Instruction / Support / Invite ----------------
+  async function getActiveStake(uid) {
+    for (const stake of ALLOWED_STAKES) {
+      const s = await db.ref(`rooms/stake_${stake}_open`).once('value'); const r = s.val();
+      if (r && r.players && r.players[uid] && (r.state === 'waiting' || r.state === 'running')) return Number(r.stake) || 0;
+    }
+    return 0;
+  }
   async function handleBalance(chatId, uid) {
     const s = await db.ref(`users/${uid}`).once('value'); const u = s.val() || {};
-    await sendMessage(chatId, `💰 <b>Balance:</b> ${Number(u.balance || 0)} ETB\n🎁 <b>Bonus:</b> ${Number(u.bonus || 0)} ETB`);
+    const playWallet = await getActiveStake(uid);
+    await sendMessage(chatId, `💰 <b>Main Wallet:</b> ${Number(u.balance || 0)} ETB\n🎮 <b>Play Wallet:</b> ${playWallet} ETB\n🎁 <b>Bonus:</b> ${Number(u.bonus || 0)} ETB`);
   }
   async function handleInstruction(chatId) {
     await sendMessage(chatId,
@@ -306,26 +314,30 @@ module.exports = function createBot(db, admin) {
       if (room.taken[String(cardNo)]) return;
       room.players[uid] = { cartelaNumber: cardNo, joinedAt: Date.now() };
       room.taken[String(cardNo)] = true;
+      if (!room.countdownEndsAt) room.countdownEndsAt = Date.now() + CARTELA_SELECTION_SECONDS * 1000;
       return room;
     });
     if (!jtx.committed) { await balRef.transaction(v => (num(v) || 0) + stake); await sendMessage(chatId, '⚠️ That cartela is already taken, pick another.'); return; }
-    let room = jtx.snapshot.val();
-    const count = Object.keys(room.players || {}).length;
-    if (count >= 2) { await roomRef.update({ state: 'running', startedAt: admin.database.ServerValue.TIMESTAMP, calledNumbers: {} }); }
     const card = getCard(cardNo);
-    const sent = await sendMessage(chatId, renderGameText(card, [], null), { reply_markup: gameKeyboard() });
+    const sent = await sendMessage(chatId, '⏳ Joined! Waiting for the cartela-selection countdown to finish...', { reply_markup: gameKeyboard() });
     const messageId = sent && sent.result && sent.result.message_id;
     startGameWatcher(chatId, uid, roomId, cardNo, card, messageId);
   }
 
   function gameKeyboard() { return { inline_keyboard: [[{ text: '🏆 BINGO!', callback_data: 'bingo' }], [{ text: '❌ Leave', callback_data: 'leave' }]] }; }
+  function renderWaitingText(room) {
+    const count = Object.keys(room.players || {}).length;
+    const secs = Math.max(0, Math.ceil(((room.countdownEndsAt || Date.now()) - Date.now()) / 1000));
+    return `⏳ Waiting for players... (${count} joined)\nGame starts in <b>${secs}s</b> (needs at least 2 players).`;
+  }
   function renderGameText(card, calledArr, lastCalled) {
     const cols = ['B', 'I', 'N', 'G', 'O'];
     const called = new Set(calledArr);
     const mark = v => v === 'FREE' ? `[${v}]` : (called.has(Number(v)) ? `[${v}]` : `${v}`);
     let grid = cols.map(c => c).join('  ') + '\n';
     for (let r = 0; r < 5; r++) grid += cols.map(c => String(mark(card[c][r])).padEnd(4)).join('') + '\n';
-    return `🔔 Last called: <b>${lastCalled ?? '-'}</b>\n\n<pre>${grid}</pre>`;
+    const calledLabel = lastCalled ? `${letterFor(lastCalled)} ${lastCalled}` : '-';
+    return `🔔 Last called: <b>${calledLabel}</b>\n\n<pre>${grid}</pre>`;
   }
 
   const watchers = new Map(); // key: `${chatId}` -> intervalId
@@ -335,14 +347,26 @@ module.exports = function createBot(db, admin) {
       const snap = await db.ref(`rooms/${roomId}`).once('value');
       const room = snap.val();
       if (!room) return;
+      if (room.state === 'waiting') {
+        if (messageId) await editMessage(chatId, messageId, renderWaitingText(room), { reply_markup: gameKeyboard() }).catch(() => {});
+        return;
+      }
       const calledArr = Object.keys(room.calledNumbers || {}).map(Number);
       if (messageId) await editMessage(chatId, messageId, renderGameText(card, calledArr, room.lastCalled), { reply_markup: gameKeyboard() }).catch(() => {});
       if (room.state === 'finished') {
         stopGameWatcher(chatId);
-        const won = room.winner === uid;
-        await sendMessage(chatId, won ? `🏆 You won ${room.prize} ETB!` : '😢 Round ended — better luck next time.', { reply_markup: mainMenuKeyboard() });
+        const winners = room.winners || {};
+        const mine = winners[uid];
+        if (mine) {
+          await sendMessage(chatId, `🏆 BINGO! You won ${mine.prize} ETB on cartela #${mine.cartelaNumber}!`, { reply_markup: mainMenuKeyboard() });
+        } else if (Object.keys(winners).length) {
+          const list = Object.values(winners).map(w => `#${w.cartelaNumber}`).join(', ');
+          await sendMessage(chatId, `🎉 BINGO! Winning cartela(s): ${list}\n😢 Better luck next time.`, { reply_markup: mainMenuKeyboard() });
+        } else {
+          await sendMessage(chatId, '😢 Round ended — better luck next time.', { reply_markup: mainMenuKeyboard() });
+        }
       }
-    }, CALL_INTERVAL_MS);
+    }, Math.min(CALL_INTERVAL_MS, 2000));
     watchers.set(chatId, { intervalId, roomId, uid, cardNo });
   }
   function stopGameWatcher(chatId) { const w = watchers.get(chatId); if (w) { clearInterval(w.intervalId); watchers.delete(chatId); } }
@@ -358,7 +382,7 @@ module.exports = function createBot(db, admin) {
     const count = Object.keys(room.players || {}).length;
     const gross = Number(room.stake) * count;
     const prize = Math.floor(gross * (1 - HOUSE_CUT));
-    const claimTx = await roomRef.transaction(r => { if (!r || r.state !== 'running' || !r.players || !r.players[uid]) return; return { ...r, state: 'finished', winner: uid, prize, payoutStatus: 'pending', finishedAt: Date.now() }; });
+    const claimTx = await roomRef.transaction(r => { if (!r || r.state !== 'running' || !r.players || !r.players[uid]) return; return { ...r, state: 'finished', winners: { [uid]: { cartelaNumber: w.cardNo, prize } }, winningNumber: room.lastCalled, payoutStatus: 'pending', finishedAt: Date.now() }; });
     if (!claimTx.committed) { await sendMessage(chatId, '⚠️ This round has already been claimed.'); return; }
     await db.ref(`users/${uid}/balance`).transaction(v => (num(v) || 0) + prize);
     await roomRef.update({ payoutStatus: 'paid' });
@@ -384,12 +408,30 @@ module.exports = function createBot(db, admin) {
     const text = (msg.text || '').trim();
     const session = getSession(chatId);
 
-    if (text === '/start') {
-      const startParam = text.split(' ')[1];
+    if (text.startsWith('/start')) {
+      const startParam = text.split(/\s+/)[1];
       await applyReferral(uid, startParam);
       clearSession(chatId);
       await sendMessage(chatId, '👋 Welcome to Beteseb Bingo! Choose an option below.', { reply_markup: mainMenuKeyboard() });
       return;
+    }
+
+    if (text.startsWith('/')) {
+      const cmd = text.slice(1).split(/[@\s]/)[0].toLowerCase();
+      const commandMap = {
+        play: () => showStakeMenu(chatId),
+        register: () => handleRegister(chatId, uid, null),
+        balance: () => handleBalance(chatId, uid),
+        deposit: () => startDeposit(chatId),
+        withdraw: () => startWithdraw(chatId),
+        transfer: () => startTransfer(chatId),
+        invite: () => handleInvite(chatId, uid),
+        instruction: () => handleInstruction(chatId),
+        support: () => handleSupport(chatId),
+        convertbonus: () => handleConvertBonus(chatId, uid),
+        bonus: () => handleConvertBonus(chatId, uid),
+      };
+      if (commandMap[cmd]) { clearSession(chatId); return commandMap[cmd](); }
     }
 
     if (session.awaiting === 'register_contact') return; // waiting for the contact share button
@@ -456,5 +498,26 @@ module.exports = function createBot(db, admin) {
     console.log('setWebhook result:', res && res.ok ? 'ok' : res);
   }
 
-  return { handleUpdate, setWebhook };
+  async function notifyUser(uid, text) {
+    if (!uid || !String(uid).startsWith('tg_')) return;
+    const chatId = String(uid).slice(3);
+    return sendMessage(chatId, text);
+  }
+
+  const BOT_COMMANDS = [
+    { command: 'start', description: 'Show the main menu' },
+    { command: 'play', description: 'Play Bingo' },
+    { command: 'register', description: 'Register your phone number' },
+    { command: 'balance', description: 'Check your balance' },
+    { command: 'deposit', description: 'Deposit money' },
+    { command: 'withdraw', description: 'Withdraw money' },
+    { command: 'transfer', description: 'Transfer to another player' },
+    { command: 'invite', description: 'Get your invite link' },
+    { command: 'instruction', description: 'How to play' },
+    { command: 'support', description: 'Contact support' },
+    { command: 'convertbonus', description: 'Convert bonus to balance' },
+  ];
+  async function setCommands() { return tgCall('setMyCommands', { commands: BOT_COMMANDS }); }
+
+  return { handleUpdate, setWebhook, notifyUser, setCommands };
 };
