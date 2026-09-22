@@ -1285,6 +1285,50 @@ app.post(
     }
   }
 );
+/* =========================================================
+   ADMIN STATS COMMAND
+========================================================= */
+
+bot.command('stats', async (ctx) => {
+  try {
+    const uid = `tg_${ctx.from.id}`;
+
+    // አድሚን መሆንህን ያረጋግጣል
+    if (!ADMIN_UIDS.includes(uid)) {
+      return ctx.reply("❌ ይህ ትእዛዝ ለአድሚን ብቻ የተፈቀደ ነው!");
+    }
+
+    // ከ Firebase ዳታቤዝ አጠቃላይ የጨዋታ ክፍሎችን ይፈልጋል
+    const snap = await db.ref('rooms').once('value');
+    const rooms = snap.val() || {};
+
+    let totalFinished = 0;
+    let totalRunning = 0;
+    let totalWaiting = 0;
+
+    for (const r of Object.values(rooms)) {
+      if (r.state === 'finished') totalFinished++;
+      else if (r.state === 'running') totalRunning++;
+      else if (r.state === 'waiting') totalWaiting++;
+    }
+
+    // የተጠቃሚዎችን አጠቃላይ ብዛት ይቆጥራል
+    const usersSnap = await db.ref('users').once('value');
+    const totalUsers = usersSnap.exists() ? Object.keys(usersSnap.val()).length : 0;
+
+    ctx.reply(
+      `📊 **የ Ethiobingo አጠቃላይ መረጃ**\n\n` +
+      `👥 አጠቃላይ ተጫዋቾች፡ ${totalUsers}\n` +
+      `🏆 ያለቁ የጨዋታ ዙሮች፡ ${totalFinished}\n` +
+      `🎮 አሁን እየተጫወቱ ያሉ፡ ${totalRunning}\n` +
+      `⏳ የሚጠብቁ ክፍሎች፡ ${totalWaiting}`
+    );
+
+  } catch (e) {
+    console.error('stats command error:', e);
+    ctx.reply("❌ መረጃውን ከዳታቤዝ በማምጣት ላይ ስህተት አጋጥሟል!");
+  }
+});
 
 
 /* =========================================================
