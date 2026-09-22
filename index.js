@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
-const axios = require('axios');
 const admin = require('firebase-admin');
 const { getCard, hasBingo, letterFor } = require('./cartela');
 const createBot = require('./telegramBot');
@@ -395,6 +394,7 @@ app.post(
           .ref(`referralCodes/${code}`)
           .set(uid);
       } else {
+        // Make sure old users have playWallet.
         const existing =
           snap.val() || {};
 
@@ -415,6 +415,11 @@ app.post(
       const p =
         pSnap.val() || {};
 
+      /*
+       * Referral is applied once,
+       * only for a new user and
+       * never to self.
+       */
       if (
         !snap.exists() &&
         startParam
@@ -493,6 +498,25 @@ app.post(
    PLAY WALLET
 ========================================================= */
 
+/*
+ * IMPORTANT:
+ *
+ * Main Wallet:
+ * users/{uid}/balance
+ *
+ * Play Wallet:
+ * users/{uid}/playWallet
+ *
+ * Deposit goes to Main Wallet.
+ *
+ * When a player joins a game:
+ *
+ * Main Wallet -> Play Wallet
+ *
+ * This prevents the old bug where the UI was showing
+ * a fake Play Wallet based only on room.stake.
+ */
+
 async function getPlayWallet(uid) {
   const s =
     await db
@@ -538,6 +562,11 @@ async function ensureWalletFields(uid) {
   }
 }
 
+
+/*
+ * Transfer stake from Main Wallet
+ * to Play Wallet atomically.
+ */
 async function moveMainToPlay(
   uid,
   amount
@@ -579,6 +608,11 @@ async function moveMainToPlay(
   return tx;
 }
 
+
+/*
+ * Move Play Wallet back to Main Wallet.
+ * Used when a room does not start.
+ */
 async function movePlayToMain(
   uid,
   amount
@@ -619,6 +653,14 @@ async function movePlayToMain(
   );
 }
 
+
+/*
+ * Remove the stake from Play Wallet
+ * when a game is completed.
+ *
+ * The stake is already committed to
+ * the game at this point.
+ */
 async function consumePlayWallet(
   uid,
   amount
@@ -942,94 +984,6 @@ app.post(
 
 
 /* =========================================================
-   SMS FORWARDER (AUTOMATIC TELEBIRR DEPOSIT)
-========================================================= */
-
-app.post('/api/sms-callback', async (req, res) => {
-  try {
-    const { message, secret } = req.body;
-
-    if (secret !== process.env.SMS_SECRET) {
-      return res.status(403).json({ error: 'Unauthorized' });
-    }
-
-    if (!message) {
-      return res.status(400).json({ error: 'No message provided' });
-    }
-
-    const amountMatch = message.match(/ETB\s*([\d.]+)/i) || message.match(/ብር\s*([\d.]+)/i);
-    const txnMatch = message.match(/(TX[A-Z0-9]+)/i) || message.match(/Transaction ID:\s*([A-Z0-9]+)/i);
-
-    if (!amountMatch || !txnMatch) {
-      return res.status(400).json({ error: 'Could not parse Telebirr SMS' });
-    }
-
-    const amount = parseFloat(amountMatch[1]);
-    const telebirrTxnId = txnMatch[1];
-
-    const requestsRef = db.ref('moneyRequests');
-    const snapshot = await requestsRef.once('value');
-    const requests = snapshot.val();
-
-    let matchedRequestId = null;
-    let matchedRequest = null;
-
-    if (requests) {
-      for (const key in requests) {
-        const reqData = requests[key];
-        if (reqData.status === 'pending' && reqData.type === 'deposit' && reqData.transactionId === telebirrTxnId) {
-          matchedRequestId = key;
-          matchedRequest = reqData;
-          break;
-        }
-      }
-    }
-
-    if (!matchedRequest) {
-      return res.status(404).json({ error: 'Matching pending deposit request not found' });
-    }
-
-    const userId = matchedRequest.uid;
-    const userBalanceRef = db.ref(`users/${userId}/balance`);
-    await userBalanceRef.transaction((current) => (current || 0) + amount);
-
-    const now = admin.database.ServerValue.TIMESTAMP;
-
-    const updates = {};
-    updates[`moneyRequests/${matchedRequestId}/status`] = 'approved';
-    updates[`moneyRequests/${matchedRequestId}/processedAt`] = now;
-    updates[`moneyRequests/${matchedRequestId}/autoApproved`] = true;
-
-    updates[`users/${userId}/transactions/${matchedRequestId}/status`] = 'approved';
-    updates[`users/${userId}/transactions/${matchedRequestId}/processedAt`] = now;
-    updates[`users/${userId}/transactions/${matchedRequestId}/autoApproved`] = true;
-
-    await db.ref().update(updates);
-
-    const cleanUserId = userId.replace('tg_', '');
-    const notificationText = `✅ *Deposit Automatically Approved!*\n\n` +
-                             `💵 *Amount:* ${amount} ETB\n` +
-                             `🧾 *Txn ID:* ${telebirrTxnId}\n` +
-                             `🎉 Your balance has been updated successfully!`;
-
-    if (BOT_TOKEN) {
-      await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-        chat_id: cleanUserId,
-        text: notificationText,
-        parse_mode: 'Markdown'
-      }).catch(err => console.error('Error sending Telegram notification:', err.message));
-    }
-
-    return res.status(200).json({ success: true, message: 'Balance updated successfully' });
-
-  } catch (error) {
-    console.error('SMS Callback Error:', error);
-    return res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-
-/* =========================================================
    WITHDRAWAL
 ========================================================= */
 
@@ -1179,6 +1133,15 @@ app.post(
       const roomRef =
         db.ref(`rooms/${roomId}`);
 
+      /*
+       * IMPORTANT:
+       *
+       * Move the stake from Main Wallet
+       * to Play Wallet FIRST.
+       *
+       * This replaces the old code that
+       * directly deducted from balance.
+       */
       const walletTx =
         await moveMainToPlay(
           req.uid,
@@ -1199,6 +1162,9 @@ app.post(
         });
       }
 
+      /*
+       * Now reserve the cartela in the room.
+       */
       const jtx =
         await roomRef.transaction(
           room => {
@@ -1257,6 +1223,11 @@ app.post(
           }
         );
 
+      /*
+       * If cartela reservation failed,
+       * return the stake from Play Wallet
+       * back to Main Wallet.
+       */
       if (!jtx.committed) {
         await movePlayToMain(
           req.uid,
@@ -1449,11 +1420,18 @@ app.post(
         });
       }
 
+      /*
+       * Consume the player's stake
+       * from Play Wallet.
+       */
       await consumePlayWallet(
         req.uid,
         Number(room.stake)
       );
 
+      /*
+       * Send the prize to Main Wallet.
+       */
       const payoutRef =
         db.ref(
           `users/${req.uid}/balance`
@@ -1613,6 +1591,10 @@ async function processMoney(
       });
     }
 
+    /*
+     * Deposit approval:
+     * add money to MAIN WALLET.
+     */
     if (
       type === 'deposit' &&
       status === 'approved'
@@ -1628,6 +1610,10 @@ async function processMoney(
         );
     }
 
+    /*
+     * Withdrawal rejection:
+     * return money to MAIN WALLET.
+     */
     if (
       type === 'withdrawal' &&
       status === 'rejected'
@@ -1814,6 +1800,14 @@ async function advanceAllRooms() {
         }
       }
 
+      /*
+       * No numbers left.
+       *
+       * Clear Play Wallet for players
+       * because the round is finished.
+       *
+       * No prize is created here.
+       */
       if (!remaining.length) {
         const players =
           room.players || {};
@@ -1936,6 +1930,11 @@ async function advanceAllRooms() {
           );
 
         if (finishTx.committed) {
+          /*
+           * Remove the game stake from
+           * Play Wallet and send the prize
+           * to Main Wallet.
+           */
           for (
             const [uid]
             of winners
@@ -1977,6 +1976,10 @@ async function advanceAllRooms() {
               });
           }
 
+          /*
+           * Players who did not win also
+           * finish their Play Wallet stake.
+           */
           for (
             const [uid]
             of Object.entries(players)
@@ -2056,6 +2059,10 @@ async function tickWaitingRooms() {
       const count =
         Object.keys(players).length;
 
+      /*
+       * Two or more players:
+       * start the game.
+       */
       if (count >= 2) {
         await roomRef.transaction(
           r => {
@@ -2076,6 +2083,14 @@ async function tickWaitingRooms() {
         );
 
       } else {
+        /*
+         * Only one player:
+         *
+         * Return the stake from
+         * Play Wallet to Main Wallet.
+         *
+         * This fixes the old wallet bug.
+         */
         for (
           const uid
           of Object.keys(players)
