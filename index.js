@@ -5,6 +5,7 @@ const path = require('path');
 const admin = require('firebase-admin');
 const { getCard, hasBingo, letterFor } = require('./cartela');
 const createBot = require('./telegramBot');
+const telebirr = require('./telebirr');
 
 const serviceAccountJson = Buffer.from(
   process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || '',
@@ -1031,6 +1032,216 @@ app.post(
         error:
           'Could not create deposit request'
       });
+    }
+  }
+);
+
+
+/* =========================================================
+   AUTOMATIC DEPOSIT (TELEBIRR CHECKOUT)
+========================================================= */
+
+/*
+ * Creates a pending moneyRequest, then asks Telebirr for a signed
+ * checkout URL. The frontend should redirect/open this URL so the
+ * player completes payment on Telebirr's own page — no screenshot or
+ * admin approval needed. The moneyRequest is auto-approved by the
+ * /telegram/telebirr-notify webhook once Telebirr confirms payment.
+ */
+app.post(
+  '/deposit-checkout',
+  auth,
+  async (req, res) => {
+    try {
+      if (!telebirr.ENABLED) {
+        return res.status(503).json({
+          error:
+            'Automatic Telebirr deposit is not configured yet'
+        });
+      }
+
+      const amount =
+        money(req.body.amount);
+
+      if (amount === null) {
+        return res.status(400).json({
+          error:
+            'Invalid deposit amount'
+        });
+      }
+
+      const id =
+        db
+          .ref('moneyRequests')
+          .push().key;
+
+      const request = {
+        uid: req.uid,
+        type: 'deposit',
+        amount,
+        status: 'pending',
+        method: 'telebirr_checkout',
+        createdAt:
+          admin.database.ServerValue
+            .TIMESTAMP
+      };
+
+      const updates = {};
+
+      updates[
+        `moneyRequests/${id}`
+      ] = request;
+
+      updates[
+        `users/${req.uid}/transactions/${id}`
+      ] = request;
+
+      await db
+        .ref()
+        .update(updates);
+
+      const order =
+        await telebirr.createCheckoutOrder({
+          merchOrderId: id,
+          title: 'Beteseb Bingo Deposit',
+          amount
+        });
+
+      res.json({
+        requestId: id,
+        checkoutUrl: order.checkoutUrl
+      });
+
+    } catch (e) {
+      console.error(
+        'deposit-checkout:',
+        e.message
+      );
+
+      res.status(500).json({
+        error:
+          'Could not start Telebirr checkout'
+      });
+    }
+  }
+);
+
+/*
+ * Telebirr calls this URL (TELEBIRR_NOTIFY_URL) once the player finishes
+ * paying. We verify the signature with Telebirr's PUBLIC key, then credit
+ * the Main Wallet and mark the matching moneyRequest as approved.
+ *
+ * Always answer 200 quickly so Telebirr does not keep retrying; do the
+ * actual crediting inside the try block regardless of what we respond.
+ */
+app.post(
+  '/telegram/telebirr-notify',
+  async (req, res) => {
+    try {
+      const result =
+        telebirr.parseNotify(req.body);
+
+      if (!result.ok) {
+        console.error(
+          'telebirr-notify rejected:',
+          result.reason
+        );
+
+        return res.status(200).send('fail');
+      }
+
+      const id = result.merchOrderId;
+
+      const rRef =
+        db.ref(
+          `moneyRequests/${id}`
+        );
+
+      const snap =
+        await rRef.once('value');
+
+      const r =
+        snap.val();
+
+      if (
+        !r ||
+        r.type !== 'deposit' ||
+        r.status !== 'pending'
+      ) {
+        // Already processed, or unknown order — acknowledge and stop.
+        return res.status(200).send('success');
+      }
+
+      if (
+        Number(result.amount) !==
+        Number(r.amount)
+      ) {
+        console.error(
+          'telebirr-notify amount mismatch:',
+          id,
+          result.amount,
+          r.amount
+        );
+
+        return res.status(200).send('fail');
+      }
+
+      await db
+        .ref(
+          `users/${r.uid}/balance`
+        )
+        .transaction(
+          v =>
+            (num(v) || 0) +
+            Number(r.amount)
+        );
+
+      const now =
+        admin.database.ServerValue
+          .TIMESTAMP;
+
+      const updates = {};
+
+      updates[
+        `moneyRequests/${id}/status`
+      ] = 'approved';
+
+      updates[
+        `moneyRequests/${id}/processedAt`
+      ] = now;
+
+      updates[
+        `moneyRequests/${id}/processedBy`
+      ] = 'telebirr_webhook';
+
+      updates[
+        `users/${r.uid}/transactions/${id}/status`
+      ] = 'approved';
+
+      updates[
+        `users/${r.uid}/transactions/${id}/processedAt`
+      ] = now;
+
+      await db
+        .ref()
+        .update(updates);
+
+      bot
+        .notifyUser(
+          r.uid,
+          `✅ Your deposit of ${r.amount} ETB is Approved.\nRef: ${id}`
+        )
+        .catch(() => {});
+
+      res.status(200).send('success');
+
+    } catch (e) {
+      console.error(
+        'telebirr-notify:',
+        e.message
+      );
+
+      res.status(200).send('fail');
     }
   }
 );
@@ -2489,5 +2700,4 @@ app.listen(
             e.message
           )
       );
-  }
-);
+  
