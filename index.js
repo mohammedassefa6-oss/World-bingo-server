@@ -5,7 +5,6 @@ const path = require('path');
 const admin = require('firebase-admin');
 const { getCard, hasBingo, letterFor } = require('./cartela');
 const createBot = require('./telegramBot');
-const telebirr = require('./telebirr');
 
 const serviceAccountJson = Buffer.from(
   process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 || '',
@@ -190,17 +189,98 @@ async function auth(req, res, next) {
   }
 }
 
-function adminOnly(req, res, next) {
-  auth(req, res, () => {
-    if (!ADMIN_UIDS.includes(req.uid)) {
-      return res.status(403).json({
-        error:
-          'Admin access required'
-      });
-    }
+async function getAdminAccess(uid) {
+  const telegramId = String(uid || '').replace(/^tg_/, '');
 
-    next();
-  });
+  // The existing ADMIN_UIDS remains the permanent owner/admin list.
+  if (ADMIN_UIDS.includes(uid)) {
+    return {
+      isOwner: true,
+      role: 'owner',
+      telegramId,
+      expiresAt: null
+    };
+  }
+
+  if (!/^\d+$/.test(telegramId)) return null;
+
+  const snap = await db
+    .ref(`adminUsers/${telegramId}`)
+    .once('value');
+
+  const a = snap.val();
+  if (!a || a.enabled === false) return null;
+
+  const expiresAt = Number(a.expiresAt || 0);
+  if (!expiresAt || expiresAt <= Date.now()) {
+    // Disable expired admins without deleting the audit record.
+    await db.ref(`adminUsers/${telegramId}`).update({
+      enabled: false,
+      expiredAt: admin.database.ServerValue.TIMESTAMP
+    }).catch(() => {});
+    return null;
+  }
+
+  return {
+    isOwner: false,
+    role: String(a.role || 'full'),
+    telegramId,
+    expiresAt,
+    ...a
+  };
+}
+
+function adminOnly(requiredRole = 'full') {
+  return (req, res, next) => {
+    auth(req, res, async () => {
+      try {
+        const access = await getAdminAccess(req.uid);
+        if (!access) {
+          return res.status(403).json({ error: 'Admin access required' });
+        }
+
+        const allowed =
+          access.isOwner ||
+          requiredRole === 'any' ||
+          access.role === 'full' ||
+          (requiredRole === 'deposit' && access.role === 'deposit');
+
+        if (!allowed) {
+          return res.status(403).json({ error: 'Insufficient admin permission' });
+        }
+
+        req.adminAccess = access;
+        next();
+      } catch (e) {
+        console.error('adminOnly:', e.message);
+        return res.status(500).json({ error: 'Could not verify admin access' });
+      }
+    });
+  };
+}
+
+async function writeAdminActivity({
+  telegramId,
+  action,
+  requestId = null,
+  targetUid = null,
+  amount = null,
+  details = null
+}) {
+  try {
+    const ref = db.ref('adminActivityLogs').push();
+    await ref.set({
+      adminTelegramId: String(telegramId || ''),
+      action: String(action || ''),
+      requestId,
+      targetUid,
+      amount: amount === null ? null : Number(amount),
+      details,
+      createdAt: admin.database.ServerValue.TIMESTAMP
+    });
+  } catch (e) {
+    console.error('writeAdminActivity:', e.message);
+  }
 }
 
 function verifyTelegram(initData) {
@@ -714,7 +794,8 @@ async function recordGameHistory({
   playerCount,
   winners,
   totalPrize,
-  winningNumber
+  winningNumber,
+  players = []
 }) {
   try {
     const id =
@@ -731,6 +812,7 @@ async function recordGameHistory({
         winnerCount: winners
           ? Object.keys(winners).length
           : 0,
+        players: Array.isArray(players) ? players : [],
         totalPrize:
           Number(totalPrize) || 0,
         winningNumber:
@@ -1032,216 +1114,6 @@ app.post(
         error:
           'Could not create deposit request'
       });
-    }
-  }
-);
-
-
-/* =========================================================
-   AUTOMATIC DEPOSIT (TELEBIRR CHECKOUT)
-========================================================= */
-
-/*
- * Creates a pending moneyRequest, then asks Telebirr for a signed
- * checkout URL. The frontend should redirect/open this URL so the
- * player completes payment on Telebirr's own page — no screenshot or
- * admin approval needed. The moneyRequest is auto-approved by the
- * /telegram/telebirr-notify webhook once Telebirr confirms payment.
- */
-app.post(
-  '/deposit-checkout',
-  auth,
-  async (req, res) => {
-    try {
-      if (!telebirr.ENABLED) {
-        return res.status(503).json({
-          error:
-            'Automatic Telebirr deposit is not configured yet'
-        });
-      }
-
-      const amount =
-        money(req.body.amount);
-
-      if (amount === null) {
-        return res.status(400).json({
-          error:
-            'Invalid deposit amount'
-        });
-      }
-
-      const id =
-        db
-          .ref('moneyRequests')
-          .push().key;
-
-      const request = {
-        uid: req.uid,
-        type: 'deposit',
-        amount,
-        status: 'pending',
-        method: 'telebirr_checkout',
-        createdAt:
-          admin.database.ServerValue
-            .TIMESTAMP
-      };
-
-      const updates = {};
-
-      updates[
-        `moneyRequests/${id}`
-      ] = request;
-
-      updates[
-        `users/${req.uid}/transactions/${id}`
-      ] = request;
-
-      await db
-        .ref()
-        .update(updates);
-
-      const order =
-        await telebirr.createCheckoutOrder({
-          merchOrderId: id,
-          title: 'Beteseb Bingo Deposit',
-          amount
-        });
-
-      res.json({
-        requestId: id,
-        checkoutUrl: order.checkoutUrl
-      });
-
-    } catch (e) {
-      console.error(
-        'deposit-checkout:',
-        e.message
-      );
-
-      res.status(500).json({
-        error:
-          'Could not start Telebirr checkout'
-      });
-    }
-  }
-);
-
-/*
- * Telebirr calls this URL (TELEBIRR_NOTIFY_URL) once the player finishes
- * paying. We verify the signature with Telebirr's PUBLIC key, then credit
- * the Main Wallet and mark the matching moneyRequest as approved.
- *
- * Always answer 200 quickly so Telebirr does not keep retrying; do the
- * actual crediting inside the try block regardless of what we respond.
- */
-app.post(
-  '/telegram/telebirr-notify',
-  async (req, res) => {
-    try {
-      const result =
-        telebirr.parseNotify(req.body);
-
-      if (!result.ok) {
-        console.error(
-          'telebirr-notify rejected:',
-          result.reason
-        );
-
-        return res.status(200).send('fail');
-      }
-
-      const id = result.merchOrderId;
-
-      const rRef =
-        db.ref(
-          `moneyRequests/${id}`
-        );
-
-      const snap =
-        await rRef.once('value');
-
-      const r =
-        snap.val();
-
-      if (
-        !r ||
-        r.type !== 'deposit' ||
-        r.status !== 'pending'
-      ) {
-        // Already processed, or unknown order — acknowledge and stop.
-        return res.status(200).send('success');
-      }
-
-      if (
-        Number(result.amount) !==
-        Number(r.amount)
-      ) {
-        console.error(
-          'telebirr-notify amount mismatch:',
-          id,
-          result.amount,
-          r.amount
-        );
-
-        return res.status(200).send('fail');
-      }
-
-      await db
-        .ref(
-          `users/${r.uid}/balance`
-        )
-        .transaction(
-          v =>
-            (num(v) || 0) +
-            Number(r.amount)
-        );
-
-      const now =
-        admin.database.ServerValue
-          .TIMESTAMP;
-
-      const updates = {};
-
-      updates[
-        `moneyRequests/${id}/status`
-      ] = 'approved';
-
-      updates[
-        `moneyRequests/${id}/processedAt`
-      ] = now;
-
-      updates[
-        `moneyRequests/${id}/processedBy`
-      ] = 'telebirr_webhook';
-
-      updates[
-        `users/${r.uid}/transactions/${id}/status`
-      ] = 'approved';
-
-      updates[
-        `users/${r.uid}/transactions/${id}/processedAt`
-      ] = now;
-
-      await db
-        .ref()
-        .update(updates);
-
-      bot
-        .notifyUser(
-          r.uid,
-          `✅ Your deposit of ${r.amount} ETB is Approved.\nRef: ${id}`
-        )
-        .catch(() => {});
-
-      res.status(200).send('success');
-
-    } catch (e) {
-      console.error(
-        'telebirr-notify:',
-        e.message
-      );
-
-      res.status(200).send('fail');
     }
   }
 );
@@ -1749,7 +1621,8 @@ app.post(
         },
         totalPrize: prize,
         winningNumber:
-          room.lastCalled
+          room.lastCalled,
+        players: Object.keys(room.players || {})
       });
 
       const finalBalance =
@@ -1781,6 +1654,88 @@ app.post(
   }
 );
 
+
+/* =========================================================
+   TEMPORARY ADMIN MANAGEMENT / AUDIT
+========================================================= */
+
+app.get('/admin/admins', adminOnly('full'), async (req, res) => {
+  try {
+    const snap = await db.ref('adminUsers').once('value');
+    const raw = snap.val() || {};
+    const now = Date.now();
+    const items = Object.entries(raw).map(([telegramId, a]) => ({
+      telegramId,
+      ...a,
+      active: a.enabled !== false && Number(a.expiresAt || 0) > now
+    }));
+    res.json({
+      ownerTelegramIds: ADMIN_UIDS.map(x => x.replace(/^tg_/, '')),
+      items
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Could not load admins' });
+  }
+});
+
+app.get('/admin/activity', adminOnly('full'), async (req, res) => {
+  try {
+    const limit = Math.min(posInt(req.query.limit) || 200, 500);
+    const snap = await db.ref('adminActivityLogs')
+      .orderByChild('createdAt').limitToLast(limit).once('value');
+    const raw = snap.val() || {};
+    const items = Object.entries(raw).map(([id, v]) => ({ id, ...v }))
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
+    res.json({ items });
+  } catch (e) {
+    res.status(500).json({ error: 'Could not load admin activity' });
+  }
+});
+
+app.get('/admin/player-activity/:telegramId', adminOnly('full'), async (req, res) => {
+  try {
+    const telegramId = String(req.params.telegramId || '').replace(/^tg_/, '');
+    const uid = `tg_${telegramId}`;
+    const snap = await db.ref('gameHistory').once('value');
+    const raw = snap.val() || {};
+    const rounds = Object.entries(raw).map(([id, g]) => ({ id, ...g }))
+      .filter(g => Array.isArray(g.players) && g.players.includes(uid))
+      .sort((a, b) => Number(b.finishedAt || 0) - Number(a.finishedAt || 0));
+    res.json({ telegramId, rounds, roundCount: rounds.length });
+  } catch (e) {
+    res.status(500).json({ error: 'Could not load player activity' });
+  }
+});
+
+app.post('/admin/admins', adminOnly('full'), async (req, res) => {
+  try {
+    const telegramId = String(req.body.telegramId || '').trim();
+    const days = Number(req.body.days);
+    const role = ['full', 'deposit'].includes(String(req.body.role || 'full'))
+      ? String(req.body.role || 'full') : 'full';
+    if (!/^\d+$/.test(telegramId)) return res.status(400).json({ error: 'Valid Telegram ID required' });
+    if (!Number.isFinite(days) || days <= 0 || days > 30) return res.status(400).json({ error: 'Days must be between 1 and 30' });
+    if (ADMIN_UIDS.includes(`tg_${telegramId}`)) return res.status(400).json({ error: 'This is already a permanent owner/admin' });
+    const expiresAt = Date.now() + days * 24 * 60 * 60 * 1000;
+    await db.ref(`adminUsers/${telegramId}`).set({
+      telegramId, role, enabled: true, createdBy: req.adminAccess.telegramId,
+      createdAt: admin.database.ServerValue.TIMESTAMP, expiresAt
+    });
+    await writeAdminActivity({ telegramId: req.adminAccess.telegramId, action: 'grant_admin', details: { targetTelegramId: telegramId, days, role, expiresAt } });
+    res.json({ ok: true, telegramId, role, expiresAt });
+  } catch (e) {
+    res.status(500).json({ error: 'Could not grant admin' });
+  }
+});
+
+app.delete('/admin/admins/:telegramId', adminOnly('full'), async (req, res) => {
+  const telegramId = String(req.params.telegramId || '').trim();
+  if (!/^\d+$/.test(telegramId)) return res.status(400).json({ error: 'Valid Telegram ID required' });
+  if (ADMIN_UIDS.includes(`tg_${telegramId}`)) return res.status(400).json({ error: 'Permanent owner cannot be removed here' });
+  await db.ref(`adminUsers/${telegramId}`).update({ enabled: false, revokedAt: admin.database.ServerValue.TIMESTAMP, revokedBy: req.adminAccess.telegramId });
+  await writeAdminActivity({ telegramId: req.adminAccess.telegramId, action: 'revoke_admin', details: { targetTelegramId: telegramId } });
+  res.json({ ok: true });
+});
 
 /* =========================================================
    ADMIN MONEY REQUESTS
@@ -1930,6 +1885,9 @@ async function processMoney(
     updates[
       `moneyRequests/${id}/processedBy`
     ] = req.uid;
+    updates[
+      `moneyRequests/${id}/processedByTelegramId`
+    ] = req.adminAccess.telegramId;
 
     updates[
       `users/${r.uid}/transactions/${id}/status`
@@ -1946,6 +1904,15 @@ async function processMoney(
     await db
       .ref()
       .update(updates);
+
+    await writeAdminActivity({
+      telegramId: req.adminAccess.telegramId,
+      action: `${status}_${type}`,
+      requestId: id,
+      targetUid: r.uid,
+      amount: r.amount,
+      details: { role: req.adminAccess.role }
+    });
 
     const finalBalance =
       num(
@@ -2274,7 +2241,8 @@ async function advanceAllRooms() {
           winners: null,
           totalPrize: 0,
           winningNumber:
-            room.lastCalled
+            room.lastCalled,
+          players: Object.keys(players)
         });
 
         continue;
@@ -2468,7 +2436,8 @@ async function advanceAllRooms() {
             playerCount: count,
             winners: winnersObj,
             totalPrize,
-            winningNumber: next
+            winningNumber: next,
+            players: Object.keys(players)
           });
         }
       }
@@ -2557,9 +2526,6 @@ async function tickWaitingRooms() {
          * Only one player:
          *
          * Return the stake from
-         * Play Wallet to Main Wallet.
-         *
-         * This fixes the old wallet bug.
          */
         for (
           const uid
@@ -2700,4 +2666,5 @@ app.listen(
             e.message
           )
       );
-  
+  }
+);
