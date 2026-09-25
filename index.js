@@ -2526,6 +2526,9 @@ async function tickWaitingRooms() {
          * Only one player:
          *
          * Return the stake from
+         * Play Wallet to Main Wallet.
+         *
+         * This fixes the old wallet bug.
          */
         for (
           const uid
