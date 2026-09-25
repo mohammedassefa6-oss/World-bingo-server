@@ -189,98 +189,17 @@ async function auth(req, res, next) {
   }
 }
 
-async function getAdminAccess(uid) {
-  const telegramId = String(uid || '').replace(/^tg_/, '');
+function adminOnly(req, res, next) {
+  auth(req, res, () => {
+    if (!ADMIN_UIDS.includes(req.uid)) {
+      return res.status(403).json({
+        error:
+          'Admin access required'
+      });
+    }
 
-  // The existing ADMIN_UIDS remains the permanent owner/admin list.
-  if (ADMIN_UIDS.includes(uid)) {
-    return {
-      isOwner: true,
-      role: 'owner',
-      telegramId,
-      expiresAt: null
-    };
-  }
-
-  if (!/^\d+$/.test(telegramId)) return null;
-
-  const snap = await db
-    .ref(`adminUsers/${telegramId}`)
-    .once('value');
-
-  const a = snap.val();
-  if (!a || a.enabled === false) return null;
-
-  const expiresAt = Number(a.expiresAt || 0);
-  if (!expiresAt || expiresAt <= Date.now()) {
-    // Disable expired admins without deleting the audit record.
-    await db.ref(`adminUsers/${telegramId}`).update({
-      enabled: false,
-      expiredAt: admin.database.ServerValue.TIMESTAMP
-    }).catch(() => {});
-    return null;
-  }
-
-  return {
-    isOwner: false,
-    role: String(a.role || 'full'),
-    telegramId,
-    expiresAt,
-    ...a
-  };
-}
-
-function adminOnly(requiredRole = 'full') {
-  return (req, res, next) => {
-    auth(req, res, async () => {
-      try {
-        const access = await getAdminAccess(req.uid);
-        if (!access) {
-          return res.status(403).json({ error: 'Admin access required' });
-        }
-
-        const allowed =
-          access.isOwner ||
-          requiredRole === 'any' ||
-          access.role === 'full' ||
-          (requiredRole === 'deposit' && access.role === 'deposit');
-
-        if (!allowed) {
-          return res.status(403).json({ error: 'Insufficient admin permission' });
-        }
-
-        req.adminAccess = access;
-        next();
-      } catch (e) {
-        console.error('adminOnly:', e.message);
-        return res.status(500).json({ error: 'Could not verify admin access' });
-      }
-    });
-  };
-}
-
-async function writeAdminActivity({
-  telegramId,
-  action,
-  requestId = null,
-  targetUid = null,
-  amount = null,
-  details = null
-}) {
-  try {
-    const ref = db.ref('adminActivityLogs').push();
-    await ref.set({
-      adminTelegramId: String(telegramId || ''),
-      action: String(action || ''),
-      requestId,
-      targetUid,
-      amount: amount === null ? null : Number(amount),
-      details,
-      createdAt: admin.database.ServerValue.TIMESTAMP
-    });
-  } catch (e) {
-    console.error('writeAdminActivity:', e.message);
-  }
+    next();
+  });
 }
 
 function verifyTelegram(initData) {
@@ -794,8 +713,7 @@ async function recordGameHistory({
   playerCount,
   winners,
   totalPrize,
-  winningNumber,
-  players = []
+  winningNumber
 }) {
   try {
     const id =
@@ -812,7 +730,6 @@ async function recordGameHistory({
         winnerCount: winners
           ? Object.keys(winners).length
           : 0,
-        players: Array.isArray(players) ? players : [],
         totalPrize:
           Number(totalPrize) || 0,
         winningNumber:
@@ -1621,8 +1538,7 @@ app.post(
         },
         totalPrize: prize,
         winningNumber:
-          room.lastCalled,
-        players: Object.keys(room.players || {})
+          room.lastCalled
       });
 
       const finalBalance =
@@ -1654,88 +1570,6 @@ app.post(
   }
 );
 
-
-/* =========================================================
-   TEMPORARY ADMIN MANAGEMENT / AUDIT
-========================================================= */
-
-app.get('/admin/admins', adminOnly('full'), async (req, res) => {
-  try {
-    const snap = await db.ref('adminUsers').once('value');
-    const raw = snap.val() || {};
-    const now = Date.now();
-    const items = Object.entries(raw).map(([telegramId, a]) => ({
-      telegramId,
-      ...a,
-      active: a.enabled !== false && Number(a.expiresAt || 0) > now
-    }));
-    res.json({
-      ownerTelegramIds: ADMIN_UIDS.map(x => x.replace(/^tg_/, '')),
-      items
-    });
-  } catch (e) {
-    res.status(500).json({ error: 'Could not load admins' });
-  }
-});
-
-app.get('/admin/activity', adminOnly('full'), async (req, res) => {
-  try {
-    const limit = Math.min(posInt(req.query.limit) || 200, 500);
-    const snap = await db.ref('adminActivityLogs')
-      .orderByChild('createdAt').limitToLast(limit).once('value');
-    const raw = snap.val() || {};
-    const items = Object.entries(raw).map(([id, v]) => ({ id, ...v }))
-      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
-    res.json({ items });
-  } catch (e) {
-    res.status(500).json({ error: 'Could not load admin activity' });
-  }
-});
-
-app.get('/admin/player-activity/:telegramId', adminOnly('full'), async (req, res) => {
-  try {
-    const telegramId = String(req.params.telegramId || '').replace(/^tg_/, '');
-    const uid = `tg_${telegramId}`;
-    const snap = await db.ref('gameHistory').once('value');
-    const raw = snap.val() || {};
-    const rounds = Object.entries(raw).map(([id, g]) => ({ id, ...g }))
-      .filter(g => Array.isArray(g.players) && g.players.includes(uid))
-      .sort((a, b) => Number(b.finishedAt || 0) - Number(a.finishedAt || 0));
-    res.json({ telegramId, rounds, roundCount: rounds.length });
-  } catch (e) {
-    res.status(500).json({ error: 'Could not load player activity' });
-  }
-});
-
-app.post('/admin/admins', adminOnly('full'), async (req, res) => {
-  try {
-    const telegramId = String(req.body.telegramId || '').trim();
-    const days = Number(req.body.days);
-    const role = ['full', 'deposit'].includes(String(req.body.role || 'full'))
-      ? String(req.body.role || 'full') : 'full';
-    if (!/^\d+$/.test(telegramId)) return res.status(400).json({ error: 'Valid Telegram ID required' });
-    if (!Number.isFinite(days) || days <= 0 || days > 30) return res.status(400).json({ error: 'Days must be between 1 and 30' });
-    if (ADMIN_UIDS.includes(`tg_${telegramId}`)) return res.status(400).json({ error: 'This is already a permanent owner/admin' });
-    const expiresAt = Date.now() + days * 24 * 60 * 60 * 1000;
-    await db.ref(`adminUsers/${telegramId}`).set({
-      telegramId, role, enabled: true, createdBy: req.adminAccess.telegramId,
-      createdAt: admin.database.ServerValue.TIMESTAMP, expiresAt
-    });
-    await writeAdminActivity({ telegramId: req.adminAccess.telegramId, action: 'grant_admin', details: { targetTelegramId: telegramId, days, role, expiresAt } });
-    res.json({ ok: true, telegramId, role, expiresAt });
-  } catch (e) {
-    res.status(500).json({ error: 'Could not grant admin' });
-  }
-});
-
-app.delete('/admin/admins/:telegramId', adminOnly('full'), async (req, res) => {
-  const telegramId = String(req.params.telegramId || '').trim();
-  if (!/^\d+$/.test(telegramId)) return res.status(400).json({ error: 'Valid Telegram ID required' });
-  if (ADMIN_UIDS.includes(`tg_${telegramId}`)) return res.status(400).json({ error: 'Permanent owner cannot be removed here' });
-  await db.ref(`adminUsers/${telegramId}`).update({ enabled: false, revokedAt: admin.database.ServerValue.TIMESTAMP, revokedBy: req.adminAccess.telegramId });
-  await writeAdminActivity({ telegramId: req.adminAccess.telegramId, action: 'revoke_admin', details: { targetTelegramId: telegramId } });
-  res.json({ ok: true });
-});
 
 /* =========================================================
    ADMIN MONEY REQUESTS
@@ -1885,9 +1719,6 @@ async function processMoney(
     updates[
       `moneyRequests/${id}/processedBy`
     ] = req.uid;
-    updates[
-      `moneyRequests/${id}/processedByTelegramId`
-    ] = req.adminAccess.telegramId;
 
     updates[
       `users/${r.uid}/transactions/${id}/status`
@@ -1904,15 +1735,6 @@ async function processMoney(
     await db
       .ref()
       .update(updates);
-
-    await writeAdminActivity({
-      telegramId: req.adminAccess.telegramId,
-      action: `${status}_${type}`,
-      requestId: id,
-      targetUid: r.uid,
-      amount: r.amount,
-      details: { role: req.adminAccess.role }
-    });
 
     const finalBalance =
       num(
@@ -2241,8 +2063,7 @@ async function advanceAllRooms() {
           winners: null,
           totalPrize: 0,
           winningNumber:
-            room.lastCalled,
-          players: Object.keys(players)
+            room.lastCalled
         });
 
         continue;
@@ -2436,8 +2257,7 @@ async function advanceAllRooms() {
             playerCount: count,
             winners: winnersObj,
             totalPrize,
-            winningNumber: next,
-            players: Object.keys(players)
+            winningNumber: next
           });
         }
       }
