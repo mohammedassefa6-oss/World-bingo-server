@@ -7,6 +7,7 @@
 const crypto = require('crypto');
 const { getCard, hasBingo, letterFor } = require('./cartela');
 const telebirr = require('./telebirr');
+const telebirrC2B = require('./telebirrC2B');
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const API = `https://api.telegram.org/bot${BOT_TOKEN}`;
@@ -708,6 +709,15 @@ module.exports = function createBot(db, admin) {
       return;
     }
 
+    // ========================================================
+    // If Telebirr C2B checkout is configured, skip the manual
+    // "send to this number + paste transaction ID" flow entirely
+    // and create a real Telebirr order with a checkout link.
+    // ========================================================
+    if (telebirrC2B.configured) {
+      return startTelebirrCheckout(chatId, uid, amount);
+    }
+
     const numberText =
       TELEBIRR_NUMBER
         ? `<b>Telebirr Number:</b> <code>${TELEBIRR_NUMBER}</code>`
@@ -726,6 +736,233 @@ module.exports = function createBot(db, admin) {
       `1️⃣ ${amount} ETB ወደ ከላይ ያለው Telebirr ቁጥር ላክ።\n` +
       `2️⃣ ክፍያውን ከፈጸምክ በኋላ <b>Telebirr Transaction ID</b> እዚህ ላክ።\n\n` +
       `ℹ️ Transaction ID ካልተረጋገጠ ለAdmin በmanual approval ይላካል።`
+    );
+  }
+
+
+  // ==========================================================
+  // TELEBIRR C2B CHECKOUT (automatic, in-chat)
+  // ==========================================================
+
+  async function startTelebirrCheckout(chatId, uid, amount) {
+
+    clearSession(chatId);
+
+    await sendMessage(
+      chatId,
+      '🔎 Telebirr checkout link በመፍጠር ላይ...'
+    );
+
+    const requestId =
+      db.ref('moneyRequests').push().key;
+
+    const merchantOrderId =
+      `TB${Date.now()}` +
+      `${String(uid).replace(/\D/g, '').slice(-10)}` +
+      `${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+
+    const request = {
+      uid,
+      type: 'deposit',
+      amount,
+      status: 'pending',
+      transactionId: merchantOrderId,
+      paymentMethod: 'telebirr_c2b',
+      createdAt: admin.database.ServerValue.TIMESTAMP
+    };
+
+    await db.ref().update({
+      [`moneyRequests/${requestId}`]: request,
+      [`users/${uid}/transactions/${requestId}`]: request,
+      [`telebirrOrders/${merchantOrderId}`]: {
+        requestId,
+        uid,
+        amount,
+        status: 'pending',
+        createdAt: admin.database.ServerValue.TIMESTAMP
+      }
+    });
+
+    try {
+
+      const result =
+        await telebirrC2B.createOrder({
+          title: `Beteseb Bingo Deposit ${amount} ETB`,
+          amount,
+          merchantOrderId
+        });
+
+      await db
+        .ref(`telebirrOrders/${merchantOrderId}`)
+        .update({
+          prepayId: result.prepayId,
+          checkoutCreatedAt: admin.database.ServerValue.TIMESTAMP
+        });
+
+      await sendMessage(
+        chatId,
+
+        `💵 <b>Deposit ${amount} ETB</b>\n\n` +
+        `ከታች ያለውን ይጫኑ እና በ Telebirr ይክፈሉ። ክፍያው ሲረጋገጥ balance ራሱ በራሱ ይጨምራል።`,
+
+        {
+          reply_markup: {
+            inline_keyboard: [
+              [{
+                text: '💳 Pay with Telebirr',
+                url: result.checkoutUrl
+              }],
+              [{
+                text: '🔄 ክፍያ ፈትሽ / Check payment',
+                callback_data: `telebirr_check:${merchantOrderId}`
+              }]
+            ]
+          }
+        }
+      );
+
+    } catch (e) {
+
+      console.error('telebirr createOrder failed:', e.message);
+
+      await db.ref().update({
+        [`moneyRequests/${requestId}/status`]: 'failed',
+        [`moneyRequests/${requestId}/error`]: String(e.message || e),
+        [`telebirrOrders/${merchantOrderId}/status`]: 'failed'
+      });
+
+      await sendMessage(
+        chatId,
+        '⚠️ Telebirr checkout link መፍጠር አልተቻለም። እባክህ ትንሽ ቆይተህ ደግመህ ሞክር ወይም Admin ን አነጋግር።',
+        {
+          reply_markup:
+            mainMenuKeyboard()
+        }
+      );
+    }
+  }
+
+
+  async function checkTelebirrDeposit(
+    chatId,
+    uid,
+    merchantOrderId,
+    cqId
+  ) {
+
+    const orderRef =
+      db.ref(`telebirrOrders/${merchantOrderId}`);
+
+    const snap =
+      await orderRef.once('value');
+
+    const order =
+      snap.val();
+
+    if (!order || order.uid !== uid) {
+      if (cqId) await answerCallback(cqId, 'Order not found.', true);
+      return;
+    }
+
+    if (order.status === 'paid') {
+      if (cqId) await answerCallback(cqId, '✅ Already credited.');
+      return;
+    }
+
+    if (cqId) await answerCallback(cqId, 'Checking...');
+
+    let status;
+
+    try {
+      status = await telebirrC2B.queryOrder(merchantOrderId);
+    } catch (e) {
+      console.error('telebirr queryOrder failed:', e.message);
+      await sendMessage(chatId, '⚠️ Telebirr ን አሁን ማግኘት አልተቻለም፣ ትንሽ ቆይተህ ደግመህ ሞክር።');
+      return;
+    }
+
+    if (!status.paid) {
+      await orderRef.update({
+        lastTradeStatus: status.tradeStatus || 'UNKNOWN',
+        lastCheckedAt: admin.database.ServerValue.TIMESTAMP
+      });
+      await sendMessage(
+        chatId,
+        `⏳ ክፍያው ገና አልተረጋገጠም (${status.tradeStatus || 'pending'})። ከከፈልክ በኋላ ደግመህ ሞክር።`
+      );
+      return;
+    }
+
+    const expected = Number(order.amount);
+
+    if (
+      !Number.isFinite(status.amount) ||
+      Math.abs(status.amount - expected) > 0.000001
+    ) {
+      await orderRef.update({
+        status: 'amount_mismatch',
+        lastTradeStatus: status.tradeStatus,
+        lastCheckedAt: admin.database.ServerValue.TIMESTAMP,
+        providerAmount: status.amount
+      });
+      await sendMessage(chatId, '⚠️ የመጠን ልዩነት ተገኝቷል፣ Support ን አነጋግር።');
+      return;
+    }
+
+    const requestRef =
+      db.ref(`moneyRequests/${order.requestId}`);
+
+    // Claim the pending request first so a concurrent webhook call
+    // (/telebirr/notify) and this button cannot both credit the wallet.
+    const claim =
+      await requestRef.transaction(current => {
+        if (!current || current.status !== 'pending') return;
+        return {
+          ...current,
+          status: 'approved',
+          processedAt: admin.database.ServerValue.TIMESTAMP,
+          processedBy: 'telebirr-auto',
+          processedByTelegramId: 'telebirr-auto',
+          transactionId: status.paymentOrderId || current.transactionId || merchantOrderId,
+          telebirrTradeStatus: status.tradeStatus
+        };
+      });
+
+    if (!claim.committed) {
+      const fresh = (await orderRef.once('value')).val();
+      if (fresh && fresh.status === 'paid') {
+        await sendMessage(chatId, '✅ Deposit already credited.');
+      }
+      return;
+    }
+
+    await db
+      .ref(`users/${uid}/balance`)
+      .transaction(v => Math.round(((num(v) || 0) + expected) * 100) / 100);
+
+    await db
+      .ref(`users/${uid}/transactions/${order.requestId}`)
+      .update({
+        status: 'approved',
+        processedAt: admin.database.ServerValue.TIMESTAMP,
+        processedBy: 'telebirr-auto',
+        transactionId: status.paymentOrderId || merchantOrderId
+      });
+
+    await orderRef.update({
+      status: 'paid',
+      paidAt: admin.database.ServerValue.TIMESTAMP,
+      paymentOrderId: status.paymentOrderId || null,
+      lastTradeStatus: status.tradeStatus
+    });
+
+    await sendMessage(
+      chatId,
+      `✅ Deposit of ${expected} ETB confirmed and credited automatically!`,
+      {
+        reply_markup:
+          mainMenuKeyboard()
+      }
     );
   }
 
@@ -2543,6 +2780,24 @@ module.exports = function createBot(db, admin) {
     await getOrCreateUser(
       cq.from
     );
+
+
+    // ========================================================
+    // TELEBIRR C2B — "Check payment" button
+    // ========================================================
+
+    if (data.startsWith('telebirr_check:')) {
+
+      const merchantOrderId =
+        data.slice('telebirr_check:'.length);
+
+      return checkTelebirrDeposit(
+        chatId,
+        uid,
+        merchantOrderId,
+        cq.id
+      );
+    }
 
 
     // ========================================================
