@@ -1,68 +1,454 @@
-<!doctype html><html lang="am"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Beteseb Bingo</title><style>
-*{box-sizing:border-box}body{margin:0;background:#0f1020;color:#fff;font-family:Arial,sans-serif}.app{max-width:560px;margin:auto;padding:14px}.header{background:#17172d;border:1px solid #29284a;border-radius:18px;padding:16px;text-align:center}.header h1{margin:0;color:#a78bfa}.muted{color:#a9a8bf;font-size:13px}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:12px}.stat,.panel{background:#17172d;border:1px solid #29284a;border-radius:14px;padding:11px}.stat b{display:block;color:#facc15;font-size:18px;margin-top:4px}.tabs{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin:12px 0}.tabs button,.btn{border:0;border-radius:10px;padding:11px 5px;background:#24233d;color:#ddd;font-weight:bold}.tabs .active{background:#7c3aed;color:#fff}.page.hidden,.screen.hidden{display:none}.stake-grid{display:grid;grid-template-columns:2fr 2fr;gap:8px}.btn.play{background:#22c55e;color:#062e14}.cartelas{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;max-height:55vh;overflow:auto}.cartelas button{padding:9px 0;border:0;border-radius:7px;background:#292845;color:#fff}.cartelas button:disabled{opacity:.3}.bingo-head,.card{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}.bingo-head b{text-align:center;color:#a78bfa;font-size:20px}.cell{aspect-ratio:1;background:#292845;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:bold}.cell.marked{background:#16a34a}.cell.free{background:#2563eb;font-size:12px}.current{margin:12px 0;text-align:center;background:#17172d;border-radius:14px;padding:12px}.current strong{font-size:42px;color:#facc15}.row{display:flex;gap:8px}.row>*{flex:1}.input{width:100%;padding:13px;border-radius:10px;border:1px solid #393755;background:#101022;color:#fff}.status{margin:10px 0;color:#b7b6c9;font-size:13px;min-height:20px}.history{text-align:left}.history-item{padding:9px 0;border-bottom:1px solid #2c2b46}.ref{word-break:break-all;background:#0c0c18;padding:10px;border-radius:10px}.danger{background:#b45309}.success{background:#22c55e;color:#062e14}.primary{background:#7c3aed;color:#fff}.section-title{margin:4px 0 12px;color:#a78bfa}.small{font-size:12px;color:#9998b0}.stats-bar{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;background:#17172d;border:1px solid #29284a;border-radius:12px;padding:8px 4px;text-align:center}.stats-bar b{display:block;color:#facc15;font-size:15px;margin-top:2px}.progress-track{height:6px;background:#24233d;border-radius:4px;overflow:hidden;margin:8px 0}.progress-fill{height:100%;width:0%;background:linear-gradient(90deg,#f472b6,#a78bfa);transition:width .3s linear}.board{display:grid;grid-template-rows:repeat(15,1fr);grid-template-columns:repeat(5,1fr);grid-auto-flow:column;gap:3px;max-height:38vh;overflow-y:auto}.board .cell{aspect-ratio:auto;padding:6px 0;font-size:12px;border-radius:5px}
-</style></head><body><div class="app"><div class="header"><h1>🎱 Beteseb Bingo</h1><div class="muted">Telegram Bingo Mini App</div><div class="stats"><div class="stat">💰 Balance<b id="balance">-</b></div><div class="stat">🎫 Room<b id="room">-</b></div><div class="stat">👥 Players<b id="players">-</b></div></div></div><div id="status" class="status">Connecting...</div>
-<div class="tabs"><button class="active" data-page="gamePage">🎱 Game</button><button data-page="walletPage">💰 Wallet</button><button data-page="invitePage">👥 Invite</button><button data-page="historyPage">📜 History</button><button data-page="profilePage">👤 Profile</button></div>
-<section id="gamePage" class="page"><div id="stakeScreen" class="panel"><h3 class="section-title">Choose Stake</h3><div class="stake-grid"><button class="btn play" data-stake="10">Play 10</button><button class="btn play" data-stake="20">Play 20</button><button class="btn play" data-stake="50">Play 50</button><button class="btn play" data-stake="100">Play 100</button></div></div><div id="cartelaScreen" class="panel hidden"><h3 class="section-title">Choose Cartela (1–500)</h3><div id="cartelas" class="cartelas"></div><button id="backStake" class="btn primary">← Back</button></div><div id="liveScreen" class="panel hidden">
- <div class="stats-bar">
-  <div><div class="small">Game ID</div><b id="gameIdEl">-</b></div>
-  <div><div class="small">Players</div><b id="playersStat">-</b></div>
-  <div><div class="small">Bet</div><b id="betStat">-</b></div>
-  <div><div class="small">Derash</div><b id="derashStat">-</b></div>
-  <div><div class="small">Called</div><b id="calledStat">0</b></div>
- </div>
- <div class="current"><div>የተጠራው ቁጥር</div><strong id="currentNumber">-</strong>
-  <label class="small" style="display:block;margin-top:4px"><input type="checkbox" id="voiceToggle" checked> 🔊 Auto-announce</label>
- </div>
- <div class="progress-track"><div id="progressBar" class="progress-fill"></div></div>
- <h4 class="section-title" style="margin-top:10px">Board</h4>
- <div class="bingo-head"><b>B</b><b>I</b><b>N</b><b>G</b><b>O</b></div>
- <div id="board" class="board"></div>
- <h4 class="section-title" style="margin-top:14px">Your Card</h4>
- <div class="bingo-head"><b>B</b><b>I</b><b>N</b><b>G</b><b>O</b></div>
- <div id="card" class="card"></div>
- <button id="bingoBtn" class="btn" style="background:#facc15;color:#422006;margin-top:12px">🏆 BINGO!</button>
-</div></section>
-<section id="walletPage" class="page hidden"><div class="panel"><h3 class="section-title">💰 Wallet</h3><div class="small">Main Wallet</div><div id="walletBalance" style="font-size:30px;color:#facc15;font-weight:bold">0 ETB</div><div class="small">Play Wallet</div><div id="playWallet" style="font-size:18px;color:#a78bfa;font-weight:bold">0 ETB</div><div class="row"><button id="depositBtn" class="btn success">Deposit</button><button id="withdrawBtn" class="btn danger">Withdraw</button></div><div id="moneyStatus" class="status"></div><p class="small">Deposit/withdrawal requests are manual and require admin processing.</p></div></section>
-<section id="invitePage" class="page hidden"><div class="panel"><h3 class="section-title">👥 Invitation</h3><div id="refCode" class="ref">Loading...</div><button id="copyInvite" class="btn primary">📋 Copy Invitation Link</button><div id="refStatus" class="status"></div></div></section>
-<section id="historyPage" class="page hidden"><div class="panel"><h3 class="section-title">📜 History</h3><div id="historyList" class="history">No history yet.</div></div></section>
-<section id="profilePage" class="page hidden"><div class="panel"><h3 class="section-title">👤 Profile</h3><div class="row"><span>Name</span><b id="profileName">-</b></div><hr><div class="row"><span>Telegram ID</span><b id="profileTelegram">-</b></div><hr><div class="row"><span>Referrals</span><b id="profileReferrals">0</b></div></div></section>
-</div><script src="https://telegram.org/js/telegram-web-app.js"></script><script type="module">
-import{initializeApp}from'https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js';import{getAuth,signInWithCustomToken}from'https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js';import{getDatabase,ref,onValue,get,off}from'https://www.gstatic.com/firebasejs/12.1.0/firebase-database.js';
-const firebaseConfig={apiKey:'AIzaSyBDO1Zorz2jicim-u5g9MN-COe_pVCpVYI',authDomain:'world-bingo-2.firebaseapp.com',databaseURL:'https://world-bingo-2-default-rtdb.firebaseio.com',projectId:'world-bingo-2',storageBucket:'world-bingo-2.firebasestorage.app',messagingSenderId:'671762364377',appId:'1:671762364377:web:0408268bb13428a04bcbc8'};const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getDatabase(app),tg=window.Telegram.WebApp;tg.expand();
-const $=id=>document.getElementById(id),status=t=>$('status').textContent=t;let uid=null,roomId=null,card=null,called=new Set(),roomRef=null,inviteLink='',currentStake=0,HOUSE_CUT=0.2,CALL_MS=3000,lastCalledSeen=null;
-fetch('/config').then(r=>r.json()).then(c=>{HOUSE_CUT=Number(c.houseCut)||0.2;CALL_MS=Number(c.callIntervalMs)||3000;}).catch(()=>{});
-function letterFor(n){n=Number(n);if(n>=1&&n<=15)return'B';if(n>=16&&n<=30)return'I';if(n>=31&&n<=45)return'N';if(n>=46&&n<=60)return'G';if(n>=61&&n<=75)return'O';return'';}
-let countdownTimer=null;
-function stopCountdown(){if(countdownTimer){clearInterval(countdownTimer);countdownTimer=null;}}
-function startCountdown(endsAt){stopCountdown();const tick=()=>{const secs=Math.max(0,Math.ceil((endsAt-Date.now())/1000));$('currentNumber').textContent=`⏳ ${secs}s`;if(secs<=0)stopCountdown();};tick();countdownTimer=setInterval(tick,1000);}
-async function api(path,options={}){const token=auth.currentUser?await auth.currentUser.getIdToken():null;const r=await fetch(path,{...options,headers:{'Content-Type':'application/json',...(options.headers||{}),...(token?{Authorization:`Bearer ${token}`}:{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||`Request failed (${r.status})`);return d;}
-function syncBalance(v){const x=(Number(v)||0).toFixed(2).replace(/\.00$/,'')+' ETB';$('balance').textContent=x;$('walletBalance').textContent=x;}
-async function refreshPlayWallet(){try{const d=await api('/balance');$('playWallet').textContent=(Number(d.playWallet)||0).toFixed(2).replace(/\.00$/,'')+' ETB';}catch(e){}}
-function showScreen(id){['stakeScreen','cartelaScreen','liveScreen'].forEach(x=>$(x).classList.toggle('hidden',x!==id));}
-async function login(){try{if(!tg.initData){status('⚠️ Open this app from Telegram.');return;}status('Verifying Telegram...');const d=await api('/verify-telegram-login',{method:'POST',body:JSON.stringify({initData:tg.initData})});const c=await signInWithCustomToken(auth,d.customToken);uid=c.user.uid;syncBalance(d.balance);listenBalance();await Promise.all([loadProfile(),loadReferral(),loadHistory(),refreshPlayWallet()]);status('✅ Connected');}catch(e){console.error(e);status('⚠️ '+e.message);}}
-function listenBalance(){const r=ref(db,`users/${uid}/balance`);onValue(r,syncBalance);}
-async function loadProfile(){const p=await api('/profile');$('profileName').textContent=p.name;$('profileTelegram').textContent=p.telegramId;$('profileReferrals').textContent=p.referrals;}
-async function loadReferral(){const p=await api('/referral');$('refCode').textContent=p.referralCode;let base=p.linkBase;if(base){inviteLink=base+(base.includes('?')?'&':'?')+'startapp='+encodeURIComponent(p.referralCode);}else if(p.botUsername){inviteLink=`https://t.me/${p.botUsername}?startapp=${encodeURIComponent(p.referralCode)}`;}else inviteLink='';$('refStatus').textContent=inviteLink?inviteLink:'Set TELEGRAM_MINI_APP_LINK_BASE in Railway to enable the copy link.';}
-async function loadHistory(){const d=await api('/history');$('historyList').innerHTML=d.items.length?d.items.map(x=>`<div class="history-item"><b>${x.type||'transaction'}</b> — ${x.amount??''} ETB<br><span class="small">${x.status||''}</span></div>`).join(''):'No history yet.';}
-async function openCartelas(stake){const r=ref(db,`rooms/stake_${stake}_open/taken`);const s=await get(r),taken=s.exists()?s.val():{};const g=$('cartelas');g.innerHTML='';for(let n=1;n<=500;n++){const b=document.createElement('button');b.textContent=n;b.disabled=!!taken[n];b.onclick=()=>join(stake,n);g.appendChild(b);}showScreen('cartelaScreen');}
-async function join(stake,n){try{status('Joining room...');const d=await api('/join-room',{method:'POST',body:JSON.stringify({stake,cartelaNumber:n})});roomId=d.roomId;card=d.yourCard;currentStake=stake;syncBalance(d.balance);$('room').textContent=roomId;$('players').textContent=d.playerCount;$('gameIdEl').textContent=roomId;$('betStat').textContent=stake;renderCard();renderBoard();listenRoom(roomId);showScreen('liveScreen');status('⏳ Waiting for the cartela-selection countdown...');}catch(e){status('⚠️ '+e.message);}}
-function renderBoard(){const el=$('board');el.innerHTML='';for(let n=1;n<=75;n++){const x=document.createElement('div');x.className='cell';x.id='bd'+n;x.textContent=n;if(called.has(n))x.classList.add('marked');el.appendChild(x);}}
-function updateBoard(){for(let n=1;n<=75;n++){const el=$('bd'+n);if(el)el.classList.toggle('marked',called.has(n));}}
-function resetProgressBar(){const bar=$('progressBar');bar.style.transition='none';bar.style.width='0%';requestAnimationFrame(()=>requestAnimationFrame(()=>{bar.style.transition=`width ${CALL_MS}ms linear`;bar.style.width='100%';}));}
-function announce(n){if(!n||!$('voiceToggle').checked||!('speechSynthesis' in window))return;try{const u=new SpeechSynthesisUtterance(`${letterFor(n)} ${n}`);speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}}
-function renderCard(){if(!card)return;const el=$('card');el.innerHTML='';for(let r=0;r<5;r++)for(const c of ['B','I','N','G','O']){const v=card[c][r],x=document.createElement('div');x.className='cell';x.textContent=v;if(v==='FREE')x.classList.add('free','marked');else if(called.has(Number(v)))x.classList.add('marked');el.appendChild(x);}}
-function listenRoom(id){if(roomRef)off(roomRef);roomRef=ref(db,`rooms/${id}`);onValue(roomRef,s=>{const r=s.val();if(!r)return;const count=Object.keys(r.players||{}).length;$('players').textContent=count;$('playersStat').textContent=count;$('betStat').textContent=r.stake;$('derashStat').textContent=Math.floor(Number(r.stake)*count*(1-HOUSE_CUT));
- if(r.state==='waiting'){stopCountdown();if(r.countdownEndsAt)startCountdown(r.countdownEndsAt);status(`⏳ Waiting for players (${count})...`);return;}
- called=new Set(Object.keys(r.calledNumbers||{}).map(Number));$('calledStat').textContent=called.size;
- if(r.lastCalled&&r.lastCalled!==lastCalledSeen){lastCalledSeen=r.lastCalled;stopCountdown();$('currentNumber').textContent=`${letterFor(r.lastCalled)} ${r.lastCalled}`;resetProgressBar();announce(r.lastCalled);}
- renderCard();updateBoard();
- if(r.state==='running')status('🎮 Game in progress...');
- if(r.state==='finished'){const winners=r.winners||{};const mine=winners[uid];if(mine)status(`🏆 You won ${mine.prize} ETB on cartela #${mine.cartelaNumber}!`);else if(Object.keys(winners).length)status(`🎉 Winning cartela(s): ${Object.values(winners).map(w=>'#'+w.cartelaNumber).join(', ')} — better luck next time.`);else status('Round ended.');}
-});}
-$('bingoBtn').onclick=async()=>{try{status('Checking BINGO...');const d=await api('/claim-bingo',{method:'POST',body:JSON.stringify({roomId})});status(`🎉 BINGO confirmed! +${d.prize} ETB`);}catch(e){status('⚠️ '+e.message);}};
-$('backStake').onclick=()=>showScreen('stakeScreen');document.querySelectorAll('.play').forEach(b=>b.onclick=()=>openCartelas(Number(b.dataset.stake)));
-$('depositBtn').onclick=async()=>{try{const info=await api('/deposit-info');const label=info.phone?`📱 Telebirr: ${info.phone}${info.name?` (${info.name})`:''}\n\n`:'';const a=prompt(`${label}Send the money above via Telebirr first, then enter the amount you sent (ETB):`);if(a===null)return;const txn=prompt('Telebirr transaction ID (receipt number):');if(txn===null)return;$('moneyStatus').textContent='Submitting...';const d=await api('/deposit-request',{method:'POST',body:JSON.stringify({amount:Number(a),transactionId:txn})});$('moneyStatus').textContent=`✅ Deposit request sent: ${d.requestId}`;loadHistory();}catch(e){$('moneyStatus').textContent='⚠️ '+e.message;}};
-$('withdrawBtn').onclick=async()=>{const a=prompt('Withdrawal amount (ETB):');if(a===null)return;try{$('moneyStatus').textContent='Submitting...';const d=await api('/withdrawal-request',{method:'POST',body:JSON.stringify({amount:Number(a)})});syncBalance(d.balance);$('moneyStatus').textContent=`✅ Withdrawal request sent: ${d.requestId}`;loadHistory();}catch(e){$('moneyStatus').textContent='⚠️ '+e.message;}};
-$('copyInvite').onclick=async()=>{if(!inviteLink){$('refStatus').textContent='Referral link is not configured yet.';return;}try{await navigator.clipboard.writeText(inviteLink);$('refStatus').textContent='✅ Invitation link copied.';}catch{$('refStatus').textContent=inviteLink;}};
-document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.add('hidden'));$(b.dataset.page).classList.remove('hidden');if(b.dataset.page==='walletPage')refreshPlayWallet();});login();
-</script></body></html>
+<!doctype html>
+<html lang="am">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Beteseb Bingo</title>
+<style>
+*{box-sizing:border-box}
+:root{--bg:#0e1224;--panel:#171a32;--panel2:#222542;--line:#34365b;--purple:#7c3aed;--purple2:#a78bfa;--yellow:#facc15;--muted:#aaaac1}
+html,body{margin:0;min-height:100%;background:linear-gradient(145deg,#25104d 0%,#11162a 45%,#0d1427 100%);color:#fff;font-family:Arial,sans-serif}
+body{padding-bottom:76px}
+button,input{font:inherit}
+button{cursor:pointer}
+.app{max-width:560px;margin:auto;padding:0 14px 20px}
+.topbar{height:68px;display:flex;align-items:center;justify-content:space-between;padding:0 2px}
+.brand{display:flex;align-items:center;gap:10px;font-size:22px;font-weight:800}
+.logo{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:#fff;color:#7c3aed;font-size:25px;font-weight:900}
+.icon-btn{background:rgba(25,27,51,.8);border:1px solid #45476c;color:#fff;border-radius:12px;padding:10px 14px;font-weight:700}
+.hero{padding:30px 8px 22px;text-align:center}
+.hero h1{font-size:42px;line-height:1.05;margin:20px 0 12px}
+.hero h1 span{color:#fbbf24}
+.hero p{color:#b8b7cb;margin:0}
+.panel{background:rgba(28,30,57,.9);border:1px solid #383a60;border-radius:20px;padding:18px;margin:12px 0}
+.gold-border{border:2px solid #a07820;box-shadow:0 8px 30px rgba(0,0,0,.18)}
+.section-title{margin:0 0 16px;color:#ddd;font-size:20px;text-align:center}
+.stake-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.stake-btn{border:0;border-radius:18px;padding:17px 10px;font-weight:800;font-size:20px;color:#fff;background:linear-gradient(90deg,#00cda0,#10a890)}
+.stake-btn:nth-child(2){background:linear-gradient(90deg,#079ee8,#5141ef)}
+.stake-btn:nth-child(3){background:linear-gradient(90deg,#7c3aed,#ec4899)}
+.stake-btn:nth-child(4){background:linear-gradient(90deg,#f59e0b,#ef4444)}
+.home-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.home-stat{text-align:center;padding:18px 8px;background:rgba(50,52,82,.65);border:1px solid #414365;border-radius:18px}
+.home-stat b{display:block;font-size:28px;color:#fff}
+.home-stat span{color:#bbb9cf;font-size:14px}
+.status{min-height:20px;color:#b9b8cc;font-size:13px;text-align:center;padding:5px}
+.hidden{display:none!important}
+.bottom-nav{position:fixed;left:0;right:0;bottom:0;z-index:50;background:#18243a;border-top:1px solid #293b58;display:grid;grid-template-columns:repeat(4,1fr);padding:7px max(8px,env(safe-area-inset-left)) calc(7px + env(safe-area-inset-bottom))}
+.nav-btn{border:0;background:transparent;color:#aeb7c8;padding:7px 3px;border-radius:14px;font-size:13px;font-weight:700}
+.nav-btn .ico{display:block;font-size:21px;margin-bottom:2px}
+.nav-btn.active{background:#203a61;color:#5da5ff}
+.wallet-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.wallet-card{background:#252846;border:1px solid #414365;border-radius:15px;padding:14px}
+.wallet-card .label{color:#c0bfd0;font-size:14px}
+.wallet-card .amount{font-size:24px;font-weight:900;color:#facc15;margin-top:5px}
+.ref{word-break:break-all;background:#0d1020;border:1px solid #353754;border-radius:12px;padding:12px}
+.row{display:flex;gap:9px}
+.row>*{flex:1}
+.btn{border:0;border-radius:12px;padding:13px;font-weight:800;color:#fff;background:#2b2d4b}
+.primary{background:#7c3aed} .success{background:#22c55e;color:#052e16} .danger{background:#dc2626}
+.cartela-top{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:7px;margin-bottom:10px}
+.mini-stat{background:rgba(57,48,91,.9);border:1px solid #5a5077;border-radius:9px;padding:7px 5px;text-align:center}
+.mini-stat span{display:block;color:#c6bfd6;font-size:12px}
+.mini-stat b{display:block;margin-top:4px;color:#fff;font-size:16px}
+.cartelas{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;max-height:66vh;overflow:auto;padding:2px}
+.cartelas button{min-height:43px;border:0;border-radius:7px;background:#ed4b0d;color:#fff;font-weight:800}
+.cartelas button:disabled{background:#3a3d58;color:#999;opacity:.75}
+.back-row{display:flex;gap:8px;margin-bottom:10px}
+.live-actions{display:flex;justify-content:space-between;gap:8px;margin-bottom:10px}
+.live-actions .btn{flex:1}
+.game-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.game-stat{background:#252846;border:1px solid #464867;border-radius:8px;padding:6px;text-align:center}
+.game-stat span{display:block;color:#bbb9ce;font-size:11px}
+.game-stat b{font-size:15px;color:#fff}
+.current{text-align:center;background:#191c35;border:1px solid #353856;border-radius:16px;padding:10px;margin:10px 0}
+.current .label{color:#bbb9cc;font-size:13px}
+.current strong{display:block;font-size:40px;color:#facc15;margin-top:2px}
+.progress-track{height:5px;background:#292c49;border-radius:5px;overflow:hidden;margin:7px 0}
+.progress-fill{height:100%;width:0;background:linear-gradient(90deg,#f472b6,#a78bfa)}
+.bingo-head,.card{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.bingo-head b{text-align:center;color:#a78bfa;font-size:18px}
+.board{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;max-height:40vh;overflow:auto}
+.board .cell,.card .cell{aspect-ratio:1;background:#292c49;border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:800}
+.board .cell.marked,.card .cell.marked{background:#16a34a}
+.cell.free{background:#2563eb!important;font-size:11px}
+.history-item{padding:10px 0;border-bottom:1px solid #30334e}
+.profile-line{display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid #30334e}
+.small{font-size:12px;color:#aaa8be}
+@media(max-width:390px){.hero h1{font-size:34px}.cartelas{grid-template-columns:repeat(6,1fr)}.game-stats{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><div class="logo">B</div><span>Beteseb Bingo</span></div>
+    <button id="rulesBtn" class="icon-btn">❔ Rules</button>
+  </header>
+
+  <div id="status" class="status">Connecting...</div>
+
+  <main>
+    <section id="gamePage">
+      <div id="homeScreen">
+        <div class="hero">
+          <h1>Welcome to <span>Beteseb<br>Bingo</span></h1>
+        </div>
+        <div class="panel gold-border">
+          <h2 class="section-title">▷ Choose Your Stake</h2>
+          <div class="stake-grid">
+            <button class="stake-btn" data-stake="10">▷ Play 10</button>
+            <button class="stake-btn" data-stake="20">▷ Play 20</button>
+            <button class="stake-btn" data-stake="50">▷ Play 50</button>
+            <button class="stake-btn" data-stake="100">▷ Play 100</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="home-stats">
+            <div class="home-stat"><b id="homeBalance">0 ETB</b><span>Total Balance</span></div>
+            <div class="home-stat"><b id="homePlayers">-</b><span>Players</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="cartelaScreen" class="hidden">
+        <div class="back-row">
+          <button id="backStake" class="btn primary">← Back</button>
+          <button id="refreshCartelas" class="btn">↻ Refresh</button>
+        </div>
+        <div class="cartela-top">
+          <div class="mini-stat"><span>Main Wallet</span><b id="cartMain">0</b></div>
+          <div class="mini-stat"><span>Play Wallet</span><b id="cartPlay">0</b></div>
+          <div class="mini-stat"><span>Stake</span><b id="cartStake">-</b></div>
+          <div class="mini-stat"><span>Time</span><b id="cartTimer">45s</b></div>
+        </div>
+        <div class="panel" style="padding:10px">
+          <h3 class="section-title">Choose Cartela (1–500)</h3>
+          <div id="cartelas" class="cartelas"></div>
+        </div>
+      </div>
+
+      <div id="liveScreen" class="hidden">
+        <div class="live-actions">
+          <button id="liveBack" class="btn primary">← Back</button>
+          <button id="liveRefresh" class="btn">↻ Refresh</button>
+        </div>
+        <div class="game-stats">
+          <div class="game-stat"><span>Main Wallet</span><b id="mainLive">0</b></div>
+          <div class="game-stat"><span>Play Wallet</span><b id="playLive">0</b></div>
+          <div class="game-stat"><span>Stake</span><b id="betStat">-</b></div>
+          <div class="game-stat"><span>Timer</span><b id="timerLive">-</b></div>
+        </div>
+        <div class="current"><div class="label">የተጠራው ቁጥር</div><strong id="currentNumber">-</strong>
+          <label class="small"><input type="checkbox" id="voiceToggle" checked> 🔊 Auto-announce</label>
+        </div>
+        <div class="progress-track"><div id="progressBar" class="progress-fill"></div></div>
+        <div class="panel">
+          <div class="small">Game <b id="gameIdEl">-</b> · Players <b id="playersStat">-</b> · Derash <b id="derashStat">-</b> · Called <b id="calledStat">0</b></div>
+          <h4 class="section-title">Board</h4>
+          <div class="bingo-head"><b>B</b><b>I</b><b>N</b><b>G</b><b>O</b></div>
+          <div id="board" class="board"></div>
+          <h4 class="section-title" style="margin-top:14px">Your Card</h4>
+          <div class="bingo-head"><b>B</b><b>I</b><b>N</b><b>G</b><b>O</b></div>
+          <div id="card" class="card"></div>
+          <button id="bingoBtn" class="btn" style="background:#facc15;color:#422006;margin-top:12px;width:100%">🏆 BINGO!</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="walletPage" class="hidden">
+      <div class="panel">
+        <h3 class="section-title">💰 Wallet</h3>
+        <div class="wallet-grid">
+          <div class="wallet-card"><div class="label">Main Wallet</div><div id="walletBalance" class="amount">0 ETB</div></div>
+          <div class="wallet-card"><div class="label">Play Wallet</div><div id="playWallet" class="amount">0 ETB</div></div>
+        </div>
+        <p class="small">Total Balance: <b id="walletTotal">0 ETB</b></p>
+        <div class="row">
+          <button id="depositBtn" class="btn success">Deposit</button>
+          <button id="withdrawBtn" class="btn danger">Withdraw</button>
+        </div>
+        <div id="moneyStatus" class="status"></div>
+      </div>
+    </section>
+
+    <section id="invitePage" class="hidden">
+      <div class="panel"><h3 class="section-title">👥 Invitation</h3>
+        <div id="refCode" class="ref">Loading...</div>
+        <button id="copyInvite" class="btn primary" style="width:100%;margin-top:10px">📋 Copy Invitation Link</button>
+        <div id="refStatus" class="status"></div>
+      </div>
+    </section>
+
+    <section id="historyPage" class="hidden">
+      <div class="panel"><h3 class="section-title">📜 History</h3><div id="historyList">No history yet.</div></div>
+    </section>
+
+    <section id="profilePage" class="hidden">
+      <div class="panel"><h3 class="section-title">👤 Profile</h3>
+        <div class="profile-line"><span>Name</span><b id="profileName">-</b></div>
+        <div class="profile-line"><span>Telegram ID</span><b id="profileTelegram">-</b></div>
+        <div class="profile-line"><span>Referrals</span><b id="profileReferrals">0</b></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<nav class="bottom-nav">
+  <button class="nav-btn active" data-page="gamePage"><span class="ico">🎮</span>Game</button>
+  <button class="nav-btn" data-page="historyPage"><span class="ico">◴</span>History</button>
+  <button class="nav-btn" data-page="walletPage"><span class="ico">▣</span>Wallet</button>
+  <button class="nav-btn" data-page="profilePage"><span class="ico">♙</span>Profile</button>
+</nav>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script type="module">
+import {initializeApp} from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-app.js';
+import {getAuth,signInWithCustomToken} from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-auth.js';
+import {getDatabase,ref,onValue,get,off} from 'https://www.gstatic.com/firebasejs/12.1.0/firebase-database.js';
+
+const firebaseConfig={apiKey:'AIzaSyBDO1Zorz2jicim-u5g9MN-COe_pVCpVYI',authDomain:'world-bingo-2.firebaseapp.com',databaseURL:'https://world-bingo-2-default-rtdb.firebaseio.com',projectId:'world-bingo-2',storageBucket:'world-bingo-2.firebasestorage.app',messagingSenderId:'671762364377',appId:'1:671762364377:web:0408268bb13428a04bcbc8'};
+const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getDatabase(app),tg=window.Telegram.WebApp;
+tg.expand();
+
+const $=id=>document.getElementById(id);
+let uid=null,roomId=null,card=null,called=new Set(),roomRef=null,inviteLink='',currentStake=0;
+let HOUSE_CUT=.2,CALL_MS=3000,lastCalledSeen=null,countdownTimer=null,cartelaTimer=null;
+let mainBalance=0,playBalance=0;
+
+const money=v=>(Number(v)||0).toFixed(2).replace(/\.00$/,'')+' ETB';
+function setWallet(main,play) {
+  if(main!==undefined && main!==null) mainBalance=Number(main)||0;
+  if(play!==undefined && play!==null) playBalance=Number(play)||0;
+  const total=mainBalance+playBalance;
+  $('walletBalance').textContent=money(mainBalance);
+  $('playWallet').textContent=money(playBalance);
+  $('walletTotal').textContent=money(total);
+  $('homeBalance').textContent=money(total);
+  $('mainLive').textContent=money(mainBalance);
+  $('playLive').textContent=money(playBalance);
+  $('cartMain').textContent=money(mainBalance);
+  $('cartPlay').textContent=money(playBalance);
+}
+function status(t){$('status').textContent=t;}
+function fmt(n){return money(n);}
+
+fetch('/config').then(r=>r.json()).then(c=>{
+  HOUSE_CUT=Number(c.houseCut)||.2;
+  CALL_MS=Number(c.callIntervalMs)||3000;
+}).catch(()=>{});
+
+async function api(path,options={}){
+  const token=auth.currentUser?await auth.currentUser.getIdToken():null;
+  const r=await fetch(path,{...options,headers:{'Content-Type':'application/json',...(options.headers||{}),...(token?{Authorization:`Bearer ${token}`}:{})}});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error||`Request failed (${r.status})`);
+  return d;
+}
+
+async function refreshWallet(){
+  try{
+    const d=await api('/balance');
+    setWallet(d.balance,d.playWallet);
+    return d;
+  }catch(e){return null;}
+}
+function listenBalance(){
+  if(!uid)return;
+  onValue(ref(db,`users/${uid}/balance`),v=>setWallet(v.val(),undefined));
+}
+async function login(){
+  try{
+    if(!tg.initData){status('⚠️ Open this app from Telegram.');return;}
+    status('Verifying Telegram...');
+    const d=await api('/verify-telegram-login',{method:'POST',body:JSON.stringify({initData:tg.initData})});
+    const c=await signInWithCustomToken(auth,d.customToken);
+    uid=c.user.uid;
+    setWallet(d.balance,d.playWallet);
+    listenBalance();
+    await Promise.all([refreshWallet(),loadProfile(),loadReferral(),loadHistory()]);
+    status('✅ Connected');
+  }catch(e){console.error(e);status('⚠️ '+e.message);}
+}
+async function loadProfile(){
+  const p=await api('/profile');
+  $('profileName').textContent=p.name||'-';
+  $('profileTelegram').textContent=p.telegramId||'-';
+  $('profileReferrals').textContent=p.referrals||0;
+}
+async function loadReferral(){
+  const p=await api('/referral');
+  $('refCode').textContent=p.referralCode||'-';
+  let base=p.linkBase;
+  if(base) inviteLink=base+(base.includes('?')?'&':'?')+'startapp='+encodeURIComponent(p.referralCode);
+  else if(p.botUsername) inviteLink=`https://t.me/${p.botUsername}?startapp=${encodeURIComponent(p.referralCode)}`;
+  else inviteLink='';
+  $('refStatus').textContent=inviteLink||'Referral link is not configured.';
+}
+async function loadHistory(){
+  const d=await api('/history');
+  $('historyList').innerHTML=d.items?.length?d.items.map(x=>`<div class="history-item"><b>${x.type||'transaction'}</b> — ${x.amount??''} ETB<br><span class="small">${x.status||''}</span></div>`).join(''):'No history yet.';
+}
+function stopCountdown(){if(countdownTimer)clearInterval(countdownTimer);countdownTimer=null;}
+function startCountdown(endsAt){
+  stopCountdown();
+  const tick=()=>{
+    const secs=Math.max(0,Math.ceil((endsAt-Date.now())/1000));
+    $('timerLive').textContent=secs+'s';
+    $('cartTimer').textContent=secs+'s';
+    if(secs<=0)stopCountdown();
+  };
+  tick();countdownTimer=setInterval(tick,1000);
+}
+function startCartelaTimer(){
+  if(cartelaTimer)clearInterval(cartelaTimer);
+  let left=45;
+  $('cartTimer').textContent=left+'s';
+  cartelaTimer=setInterval(()=>{
+    left--; $('cartTimer').textContent=Math.max(0,left)+'s';
+    if(left<=0){clearInterval(cartelaTimer);cartelaTimer=null;}
+  },1000);
+}
+async function openCartelas(stake){
+  currentStake=stake;$('cartStake').textContent=stake;
+  await refreshWallet();
+  const r=ref(db,`rooms/stake_${stake}_open/taken`);
+  const s=await get(r),taken=s.exists()?s.val():{};
+  const g=$('cartelas');g.innerHTML='';
+  for(let n=1;n<=500;n++){
+    const b=document.createElement('button');
+    b.textContent=n;b.disabled=!!taken[n];
+    b.onclick=()=>join(stake,n);
+    g.appendChild(b);
+  }
+  $('homeScreen').classList.add('hidden');$('cartelaScreen').classList.remove('hidden');$('liveScreen').classList.add('hidden');
+  startCartelaTimer();
+}
+async function join(stake,n){
+  try{
+    status('Joining room...');
+    const d=await api('/join-room',{method:'POST',body:JSON.stringify({stake,cartelaNumber:n})});
+    roomId=d.roomId;card=d.yourCard;currentStake=stake;
+    setWallet(d.balance,d.playWallet);
+    await refreshWallet(); // important: refresh BOTH wallets after stake transfer
+    $('gameIdEl').textContent=roomId;$('betStat').textContent=stake;$('playersStat').textContent=d.playerCount||'-';
+    renderCard();renderBoard();listenRoom(roomId);
+    $('homeScreen').classList.add('hidden');$('cartelaScreen').classList.add('hidden');$('liveScreen').classList.remove('hidden');
+    status('⏳ Waiting for players...');
+  }catch(e){status('⚠️ '+e.message);}
+}
+function renderBoard(){
+  const el=$('board');el.innerHTML='';
+  for(let n=1;n<=75;n++){const x=document.createElement('div');x.className='cell';x.id='bd'+n;x.textContent=n;if(called.has(n))x.classList.add('marked');el.appendChild(x);}
+}
+function updateBoard(){
+  for(let n=1;n<=75;n++){const el=$('bd'+n);if(el)el.classList.toggle('marked',called.has(n));}
+}
+function resetProgressBar(){
+  const bar=$('progressBar');bar.style.transition='none';bar.style.width='0%';
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{bar.style.transition=`width ${CALL_MS}ms linear`;bar.style.width='100%';}));
+}
+function letterFor(n){
+  n=Number(n);if(n<=15)return'B';if(n<=30)return'I';if(n<=45)return'N';if(n<=60)return'G';if(n<=75)return'O';return'';
+}
+function announce(n){
+  if(!n||!$('voiceToggle').checked||!('speechSynthesis' in window))return;
+  try{const u=new SpeechSynthesisUtterance(`${letterFor(n)} ${n}`);speechSynthesis.cancel();speechSynthesis.speak(u);}catch(e){}
+}
+function renderCard(){
+  if(!card)return;
+  const el=$('card');el.innerHTML='';
+  for(let r=0;r<5;r++)for(const c of ['B','I','N','G','O']){
+    const v=card[c][r],x=document.createElement('div');x.className='cell';x.textContent=v;
+    if(v==='FREE')x.classList.add('free','marked');
+    else if(called.has(Number(v)))x.classList.add('marked');
+    el.appendChild(x);
+  }
+}
+function listenRoom(id){
+  if(roomRef)off(roomRef);
+  roomRef=ref(db,`rooms/${id}`);
+  onValue(roomRef,s=>{
+    const r=s.val();if(!r)return;
+    const count=Object.keys(r.players||{}).length;
+    $('playersStat').textContent=count;$('betStat').textContent=r.stake;
+    $('derashStat').textContent=Math.floor(Number(r.stake)*count*(1-HOUSE_CUT));
+    $('homePlayers').textContent=count;
+    if(r.state==='waiting'){
+      if(r.countdownEndsAt)startCountdown(r.countdownEndsAt);
+      status(`⏳ Waiting for players (${count})...`);return;
+    }
+    called=new Set(Object.keys(r.calledNumbers||{}).map(Number));
+    $('calledStat').textContent=called.size;
+    if(r.lastCalled&&r.lastCalled!==lastCalledSeen){
+      lastCalledSeen=r.lastCalled;stopCountdown();
+      $('currentNumber').textContent=`${letterFor(r.lastCalled)} ${r.lastCalled}`;
+      resetProgressBar();announce(r.lastCalled);
+    }
+    renderCard();updateBoard();
+    if(r.state==='running')status('🎮 Game in progress...');
+    if(r.state==='finished'){
+      const winners=r.winners||{},mine=winners[uid];
+      if(mine)status(`🏆 You won ${mine.prize} ETB on cartela #${mine.cartelaNumber}!`);
+      else if(Object.keys(winners).length)status(`🎉 Winning cartela(s): ${Object.values(winners).map(w=>'#'+w.cartelaNumber).join(', ')}`);
+      else status('Round ended.');
+      refreshWallet();
+    }
+  });
+}
+$('bingoBtn').onclick=async()=>{
+  try{
+    status('Checking BINGO...');
+    const d=await api('/claim-bingo',{method:'POST',body:JSON.stringify({roomId})});
+    await refreshWallet();
+    status(`🎉 BINGO confirmed! +${d.prize} ETB`);
+  }catch(e){status('⚠️ '+e.message);}
+};
+$('backStake').onclick=()=>{
+  if(cartelaTimer)clearInterval(cartelaTimer);
+  $('cartelaScreen').classList.add('hidden');$('homeScreen').classList.remove('hidden');
+};
+$('liveBack').onclick=()=>{
+  if(roomRef)off(roomRef);roomRef=null;
+  $('liveScreen').classList.add('hidden');$('homeScreen').classList.remove('hidden');
+};
+$('liveRefresh').onclick=()=>refreshWallet();
+$('refreshCartelas').onclick=()=>openCartelas(currentStake);
+document.querySelectorAll('.stake-btn').forEach(b=>b.onclick=()=>openCartelas(Number(b.dataset.stake)));
+
+$('depositBtn').onclick=async()=>{
+  try{
+    const info=await api('/deposit-info');
+    const label=info.phone?`📱 Telebirr: ${info.phone}${info.name?` (${info.name})`:''}\n\n`:'';
+    const a=prompt(`${label}Send the money above via Telebirr first, then enter the amount you sent (ETB):`);
+    if(a===null)return;
+    const txn=prompt('Telebirr transaction ID (receipt number):');if(txn===null)return;
+    $('moneyStatus').textContent='Submitting...';
+    const d=await api('/deposit-request',{method:'POST',body:JSON.stringify({amount:Number(a),transactionId:txn})});
+    $('moneyStatus').textContent=`✅ Deposit request sent: ${d.requestId}`;loadHistory();
+  }catch(e){$('moneyStatus').textContent='⚠️ '+e.message;}
+};
+$('withdrawBtn').onclick=async()=>{
+  const a=prompt('Withdrawal amount (ETB):');if(a===null)return;
+  try{
+    $('moneyStatus').textContent='Submitting...';
+    const d=await api('/withdrawal-request',{method:'POST',body:JSON.stringify({amount:Number(a)})});
+    setWallet(d.balance,d.playWallet);await refreshWallet();
+    $('moneyStatus').textContent=`✅ Withdrawal request sent: ${d.requestId}`;loadHistory();
+  }catch(e){$('moneyStatus').textContent='⚠️ '+e.message;}
+};
+$('copyInvite').onclick=async()=>{
+  if(!inviteLink){$('refStatus').textContent='Referral link is not configured yet.';return;}
+  try{await navigator.clipboard.writeText(inviteLink);$('refStatus').textContent='✅ Invitation link copied.';}
+  catch{$('refStatus').textContent=inviteLink;}
+};
+document.querySelectorAll('.nav-btn').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.nav-btn').forEach(x=>x.classList.remove('active'));b.classList.add('active');
+  document.querySelectorAll('main>section').forEach(x=>x.classList.add('hidden'));
+  $(b.dataset.page).classList.remove('hidden');
+  if(b.dataset.page==='walletPage')refreshWallet();
+});
+$('rulesBtn').onclick=()=>alert('Choose a stake, select an available cartela, then wait for the round to start. When you have a winning pattern, press BINGO.');
+login();
+</script>
+</body>
+</html>
