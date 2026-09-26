@@ -507,14 +507,12 @@ app.post(
  * Play Wallet:
  * users/{uid}/playWallet
  *
- * Deposit goes to Main Wallet.
+ * Approved deposits go directly to Play Wallet.
  *
- * When a player joins a game:
- *
- * Main Wallet -> Play Wallet
- *
- * This prevents the old bug where the UI was showing
- * a fake Play Wallet based only on room.stake.
+ * Main Wallet is kept separate for withdrawals/refunds.
+ * Joining a game does not move money between wallets.
+ * The stake is consumed from Play Wallet when the round
+ * is completed.
  */
 
 async function getPlayWallet(uid) {
@@ -1187,14 +1185,20 @@ app.post(
         db.ref(`rooms/${roomId}`);
 
       /*
-       * Play Wallet is the game wallet.
-       * Deposits are credited directly to Play Wallet.
-       * Joining a room only checks that the stake is available;
-       * the stake is consumed when the round finishes.
+       * PLAY WALLET IS THE GAME WALLET.
+       *
+       * Deposits are credited to playWallet when approved.
+       * Joining a room must NOT move money from Main Wallet.
+       * The stake is consumed from Play Wallet only when the
+       * round is completed.
        */
       await ensureWalletFields(req.uid);
+
       const playSnap =
-        await db.ref(`users/${req.uid}/playWallet`).once('value');
+        await db
+          .ref(`users/${req.uid}/playWallet`)
+          .once('value');
+
       const playBalance =
         Number(playSnap.val() || 0);
 
@@ -1267,16 +1271,10 @@ app.post(
         );
 
       /*
-       * If cartela reservation failed,
-       * return the stake from Play Wallet
-       * back to Main Wallet.
+       * No money was moved when joining, so if the cartela
+       * reservation fails there is nothing to refund.
        */
       if (!jtx.committed) {
-        await movePlayToMain(
-          req.uid,
-          stake
-        );
-
         return res.status(409).json({
           error:
             'Cartela is already taken or the room has started.'
@@ -1657,6 +1655,10 @@ async function processMoney(
     /*
      * Deposit approval:
      * add money directly to PLAY WALLET.
+     *
+     * This is intentional: Play Wallet is the wallet used
+     * for Bingo stakes. Main Wallet remains available for
+     * withdrawals/refunds and other non-game funds.
      */
     if (
       type === 'deposit' &&
