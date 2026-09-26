@@ -1187,33 +1187,21 @@ app.post(
         db.ref(`rooms/${roomId}`);
 
       /*
-       * IMPORTANT:
-       *
-       * Move the stake from Main Wallet
-       * to Play Wallet FIRST.
-       *
-       * This replaces the old code that
-       * directly deducted from balance.
+       * Play Wallet is the game wallet.
+       * Deposits are credited directly to Play Wallet.
+       * Joining a room only checks that the stake is available;
+       * the stake is consumed when the round finishes.
        */
       await ensureWalletFields(req.uid);
+      const playSnap =
+        await db.ref(`users/${req.uid}/playWallet`).once('value');
+      const playBalance =
+        Number(playSnap.val() || 0);
 
-      const walletTx =
-        await moveMainToPlay(
-          req.uid,
-          stake
-        );
-
-      if (!walletTx.committed) {
-        const user =
-          walletTx.snapshot.val() ||
-          {};
-
-        const b =
-          num(user.balance) || 0;
-
+      if (playBalance < stake) {
         return res.status(412).json({
           error:
-            `Insufficient balance. You have ${b} ETB; ${stake} ETB is required.`
+            `Insufficient Play Wallet. You have ${playBalance} ETB; ${stake} ETB is required.`
         });
       }
 
@@ -1231,20 +1219,10 @@ app.post(
                 taken: {}
               };
 
-            if (Number(room.stake) !== stake) {
-              return;
-            }
-
-            if (room.state === 'finished') {
-              room = {
-                stake,
-                state: 'waiting',
-                players: {},
-                taken: {}
-              };
-            }
-
-            if (room.state !== 'waiting') {
+            if (
+              room.state !== 'waiting' ||
+              Number(room.stake) !== stake
+            ) {
               return;
             }
 
@@ -1678,7 +1656,7 @@ async function processMoney(
 
     /*
      * Deposit approval:
-     * add money to MAIN WALLET.
+     * add money directly to PLAY WALLET.
      */
     if (
       type === 'deposit' &&
@@ -1686,7 +1664,7 @@ async function processMoney(
     ) {
       await db
         .ref(
-          `users/${r.uid}/balance`
+          `users/${r.uid}/playWallet`
         )
         .transaction(
           v =>
