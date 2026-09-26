@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
@@ -695,6 +694,59 @@ async function consumePlayWallet(
       };
     }
   );
+}
+
+
+/* =========================================================
+   GAME HISTORY (admin reporting)
+========================================================= */
+
+/*
+ * Every finished room (won or no-winner) is archived here
+ * so admins can see total rounds played and full history,
+ * since the live `rooms/{roomId}` node gets reset/reused
+ * for the next round.
+ */
+async function recordGameHistory({
+  roomId,
+  stake,
+  playerCount,
+  winners,
+  totalPrize,
+  winningNumber
+}) {
+  try {
+    const id =
+      db.ref('gameHistory').push().key;
+
+    await db
+      .ref(`gameHistory/${id}`)
+      .set({
+        roomId,
+        stake: Number(stake) || 0,
+        playerCount:
+          Number(playerCount) || 0,
+        winners: winners || null,
+        winnerCount: winners
+          ? Object.keys(winners).length
+          : 0,
+        totalPrize:
+          Number(totalPrize) || 0,
+        winningNumber:
+          winningNumber === undefined
+            ? null
+            : winningNumber,
+        finishedAt:
+          admin.database.ServerValue
+            .TIMESTAMP
+      });
+
+  } catch (e) {
+    console.error(
+      'recordGameHistory:',
+      e.message
+    );
+  }
 }
 
 
@@ -1469,6 +1521,26 @@ app.post(
               .TIMESTAMP
         });
 
+      /*
+       * Archive this finished round so
+       * admins can see it in game history.
+       */
+      await recordGameHistory({
+        roomId,
+        stake: room.stake,
+        playerCount: count,
+        winners: {
+          [req.uid]: {
+            cartelaNumber:
+              player.cartelaNumber,
+            prize
+          }
+        },
+        totalPrize: prize,
+        winningNumber:
+          room.lastCalled
+      });
+
       const finalBalance =
         num(
           (
@@ -1763,6 +1835,155 @@ app.post(
 
 
 /* =========================================================
+   ADMIN GAME HISTORY
+========================================================= */
+
+/*
+ * Full list of finished games (rounds), newest first.
+ * Query params:
+ *   ?limit=100   (max 500, default 100)
+ *   ?stake=50    (optional filter, one of 10/20/50/100)
+ */
+app.get(
+  '/admin/game-history',
+  adminOnly,
+  async (req, res) => {
+    try {
+      const limit =
+        Math.min(
+          posInt(req.query.limit) ||
+            100,
+          500
+        );
+
+      const s =
+        await db
+          .ref('gameHistory')
+          .orderByChild('finishedAt')
+          .limitToLast(limit)
+          .once('value');
+
+      const raw =
+        s.val() || {};
+
+      let items =
+        Object.entries(raw)
+          .map(([id, v]) => ({
+            id,
+            ...v
+          }))
+          .sort(
+            (a, b) =>
+              Number(b.finishedAt || 0) -
+              Number(a.finishedAt || 0)
+          );
+
+      const stakeFilter =
+        posInt(req.query.stake);
+
+      if (
+        stakeFilter &&
+        ALLOWED_STAKES.has(
+          stakeFilter
+        )
+      ) {
+        items = items.filter(
+          g =>
+            Number(g.stake) ===
+            stakeFilter
+        );
+      }
+
+      res.json({
+        items,
+        count: items.length
+      });
+
+    } catch (e) {
+      console.error(e);
+
+      res.status(500).json({
+        error:
+          'Could not load game history'
+      });
+    }
+  }
+);
+
+
+/*
+ * Summary numbers for the admin dashboard:
+ * total rounds played, total players served,
+ * total prize money paid out, and a breakdown
+ * of how many rounds were played per stake.
+ */
+app.get(
+  '/admin/stats',
+  adminOnly,
+  async (req, res) => {
+    try {
+      const s =
+        await db
+          .ref('gameHistory')
+          .once('value');
+
+      const raw =
+        s.val() || {};
+
+      const items =
+        Object.values(raw);
+
+      const totalGames =
+        items.length;
+
+      const totalPlayers =
+        items.reduce(
+          (sum, g) =>
+            sum +
+            (Number(g.playerCount) ||
+              0),
+          0
+        );
+
+      const totalPrizePaid =
+        items.reduce(
+          (sum, g) =>
+            sum +
+            (Number(g.totalPrize) ||
+              0),
+          0
+        );
+
+      const byStake = {};
+
+      for (const g of items) {
+        const key =
+          String(g.stake || 'unknown');
+
+        byStake[key] =
+          (byStake[key] || 0) + 1;
+      }
+
+      res.json({
+        totalGames,
+        totalPlayers,
+        totalPrizePaid,
+        byStake
+      });
+
+    } catch (e) {
+      console.error(e);
+
+      res.status(500).json({
+        error:
+          'Could not load stats'
+      });
+    }
+  }
+);
+
+
+/* =========================================================
    ADVANCE RUNNING GAMES
 ========================================================= */
 
@@ -1828,6 +2049,22 @@ async function advanceAllRooms() {
             `rooms/${roomId}/state`
           )
           .set('finished');
+
+        /*
+         * Archive this round even though
+         * nobody won, so the total round
+         * count stays accurate.
+         */
+        await recordGameHistory({
+          roomId,
+          stake: room.stake,
+          playerCount:
+            Object.keys(players).length,
+          winners: null,
+          totalPrize: 0,
+          winningNumber:
+            room.lastCalled
+        });
 
         continue;
       }
@@ -1931,13 +2168,15 @@ async function advanceAllRooms() {
           );
 
         if (finishTx.committed) {
+          const winnersObj = {};
+
           /*
            * Remove the game stake from
            * Play Wallet and send the prize
            * to Main Wallet.
            */
           for (
-            const [uid]
+            const [uid, p]
             of winners
           ) {
             await consumePlayWallet(
@@ -1975,6 +2214,12 @@ async function advanceAllRooms() {
                   admin.database.ServerValue
                     .TIMESTAMP
               });
+
+            winnersObj[uid] = {
+              cartelaNumber:
+                p.cartelaNumber,
+              prize: share
+            };
           }
 
           /*
@@ -2000,6 +2245,19 @@ async function advanceAllRooms() {
 
           await roomRef.update({
             payoutStatus: 'paid'
+          });
+
+          /*
+           * Archive this round with its
+           * winner(s) and total prize paid.
+           */
+          await recordGameHistory({
+            roomId,
+            stake: room.stake,
+            playerCount: count,
+            winners: winnersObj,
+            totalPrize,
+            winningNumber: next
           });
         }
       }
@@ -2130,7 +2388,7 @@ setInterval(
 ========================================================= */
 
 app.get(
-  '*',
+  '/{*splat}',
   (req, res) =>
     res.sendFile(
       path.join(
