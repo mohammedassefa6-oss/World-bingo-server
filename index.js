@@ -1195,6 +1195,8 @@ app.post(
        * This replaces the old code that
        * directly deducted from balance.
        */
+      await ensureWalletFields(req.uid);
+
       const walletTx =
         await moveMainToPlay(
           req.uid,
@@ -1229,10 +1231,20 @@ app.post(
                 taken: {}
               };
 
-            if (
-              room.state !== 'waiting' ||
-              Number(room.stake) !== stake
-            ) {
+            if (Number(room.stake) !== stake) {
+              return;
+            }
+
+            if (room.state === 'finished') {
+              room = {
+                stake,
+                state: 'waiting',
+                players: {},
+                taken: {}
+              };
+            }
+
+            if (room.state !== 'waiting') {
               return;
             }
 
@@ -2388,7 +2400,7 @@ setInterval(
 ========================================================= */
 
 app.get(
-  '/{*splat}',
+  '*',
   (req, res) =>
     res.sendFile(
       path.join(
